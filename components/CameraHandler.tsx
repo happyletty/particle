@@ -10,7 +10,7 @@ interface CameraHandlerProps {
 
 const CameraHandler: React.FC<CameraHandlerProps> = ({ onPinchChange, onStatusChange, onError }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number>(0);
   const lastGestureTime = useRef<number>(0);
 
   useEffect(() => {
