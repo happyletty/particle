@@ -36,13 +36,13 @@ const App: React.FC = () => {
 
   return (
     <div 
-      className="relative w-full h-[100dvh] bg-black text-white overflow-hidden font-sans cursor-pointer"
+      className="app-container"
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
     >
       
       {/* 3D Scene Layer */}
-      <div className="absolute inset-0 z-0">
+      <div className="scene-layer">
         <Canvas 
           // Adjusted camera for smaller scale: closer position
           camera={{ position: [0, 16, 35], fov: 50 }} 
@@ -89,11 +89,11 @@ const App: React.FC = () => {
       </div>
 
       {/* UI Overlay Layer - Minimalist */}
-      <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
+      <div className="ui-layer">
         {!isReady && !hasError && (
-           <div className="flex flex-col items-center space-y-3 p-6 rounded-2xl bg-black/20 backdrop-blur-xl border border-white/10">
-             <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
-             <span className="text-sm font-light text-white/70 tracking-widest uppercase">{status}</span>
+           <div className="loading-card">
+             <Loader2 className="spinner" />
+             <span className="loading-text">{status}</span>
            </div>
         )}
       </div>

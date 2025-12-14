@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, useEffect, Suspense } from 'react';
+import React, { useMemo, useRef, useState, useEffect, Suspense, Component } from 'react';
 import { useFrame, useThree, extend } from '@react-three/fiber';
 import * as THREE from 'three';
 import { shaderMaterial, Image, useVideoTexture, Billboard } from '@react-three/drei';
@@ -20,7 +20,7 @@ const GARLAND_COUNT = 2500;
 
 // --- Error Boundary for Media Gallery ---
 interface ErrorBoundaryProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   fallback?: React.ReactNode;
 }
 
@@ -28,8 +28,11 @@ interface ErrorBoundaryState {
   hasError: boolean;
 }
 
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false };
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError(): ErrorBoundaryState {
     return { hasError: true };
@@ -239,7 +242,8 @@ const PhysicalGlareMaterial = shaderMaterial(
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
 
-      float glareSize = particleScale * (2.0 + vIntensity * 1.5); 
+      // Reduced glare size by half as requested: (2.0 + ...) -> (1.0 + ...)
+      float glareSize = particleScale * (1.0 + vIntensity * 0.75); 
       vec3 offset = (camRight * position.x + camUp * position.y) * glareSize;
       vec3 finalPos = surfacePos + offset;
       
@@ -421,6 +425,10 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
   const meshDiamondRef = useRef<THREE.InstancedMesh>(null); 
   const meshShardRef = useRef<THREE.InstancedMesh>(null);   
   const meshOrbRef = useRef<THREE.InstancedMesh>(null);
+  // ADDED: Refs for new shapes
+  const meshCubeRef = useRef<THREE.InstancedMesh>(null);
+  const meshSphereRef = useRef<THREE.InstancedMesh>(null);
+
   const meshGlareRef = useRef<THREE.InstancedMesh>(null);
   const meshHaloRef = useRef<THREE.InstancedMesh>(null);
   
@@ -437,7 +445,8 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
 
   const { particles, counts, glareAttributes, haloIndices } = useMemo(() => {
     const data = [];
-    const typeCounts = [0, 0, 0];
+    // CHANGED: Initialize 5 counts for Diamond, Shard, Orb, Cube, Sphere
+    const typeCounts = [0, 0, 0, 0, 0];
     
     const gIndices: number[] = [];
     const gNormals: number[] = [];
@@ -463,7 +472,8 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
     const MIN_HALO_GAP = 15; 
 
     for (let i = 0; i < TOTAL_COUNT; i++) {
-      const shapeType = Math.floor(Math.random() * 3);
+      // CHANGED: Randomly select from 5 shapes instead of 3
+      const shapeType = Math.floor(Math.random() * 5);
       typeCounts[shapeType]++;
       
       gIndices.push(i);
@@ -649,7 +659,8 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
   }, []);
 
   useFrame((state, delta) => {
-    if (!meshDiamondRef.current || !meshShardRef.current || !meshOrbRef.current) return;
+    // ADDED: Checks for new refs
+    if (!meshDiamondRef.current || !meshShardRef.current || !meshOrbRef.current || !meshCubeRef.current || !meshSphereRef.current) return;
 
     if (glareMatRef.current) {
         glareMatRef.current.uniforms.uTime.value = state.clock.getElapsedTime();
@@ -672,6 +683,9 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
     meshDiamondRef.current.rotation.y = newRotY;
     meshShardRef.current.rotation.y = newRotY;
     meshOrbRef.current.rotation.y = newRotY;
+    // ADDED: Rotate new meshes
+    meshCubeRef.current.rotation.y = newRotY;
+    meshSphereRef.current.rotation.y = newRotY;
     
     if (meshGlareRef.current) meshGlareRef.current.rotation.y = newRotY;
     if (meshHaloRef.current) meshHaloRef.current.rotation.y = newRotY;
@@ -679,8 +693,11 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
     let idx0 = 0;
     let idx1 = 0;
     let idx2 = 0;
+    // ADDED: Counters for new shapes
+    let idx3 = 0;
+    let idx4 = 0;
 
-    particles.forEach((particle) => {
+    particles.forEach((particle, i) => {
       const target = shape === ShapeType.TREE ? particle.targetPos.tree : particle.targetPos.galaxy;
       particle.currentPos.lerp(target, lerpFactor);
 
@@ -692,7 +709,12 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
       
       tempObject.position.copy(particle.currentPos);
       tempObject.rotation.copy(particle.rotation);
-      tempObject.scale.setScalar(particle.scale);
+      
+      // Hide the solid geometry for the central star (index 0) to leave only the glare/halo, 
+      // otherwise use the normal particle scale.
+      const geomScale = (i === 0) ? 0 : particle.scale;
+      tempObject.scale.setScalar(geomScale);
+      
       tempObject.updateMatrix();
 
       if (particle.shapeType === 0) {
@@ -703,10 +725,20 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
         meshShardRef.current!.setMatrixAt(idx1, tempObject.matrix);
         meshShardRef.current!.setColorAt(idx1, particle.currentColor);
         idx1++;
-      } else {
+      } else if (particle.shapeType === 2) {
         meshOrbRef.current!.setMatrixAt(idx2, tempObject.matrix);
         meshOrbRef.current!.setColorAt(idx2, particle.currentColor);
         idx2++;
+      } 
+      // ADDED: Logic for Cubes (Type 3) and Spheres (Type 4)
+      else if (particle.shapeType === 3) {
+        meshCubeRef.current!.setMatrixAt(idx3, tempObject.matrix);
+        meshCubeRef.current!.setColorAt(idx3, particle.currentColor);
+        idx3++;
+      } else {
+        meshSphereRef.current!.setMatrixAt(idx4, tempObject.matrix);
+        meshSphereRef.current!.setColorAt(idx4, particle.currentColor);
+        idx4++;
       }
     });
 
@@ -745,6 +777,13 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
     
     meshOrbRef.current.instanceMatrix.needsUpdate = true;
     if (meshOrbRef.current.instanceColor) meshOrbRef.current.instanceColor.needsUpdate = true;
+
+    // ADDED: Update flags for new meshes
+    meshCubeRef.current.instanceMatrix.needsUpdate = true;
+    if (meshCubeRef.current.instanceColor) meshCubeRef.current.instanceColor.needsUpdate = true;
+
+    meshSphereRef.current.instanceMatrix.needsUpdate = true;
+    if (meshSphereRef.current.instanceColor) meshSphereRef.current.instanceColor.needsUpdate = true;
   });
 
   const materialProps = {
@@ -770,6 +809,18 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
       <instancedMesh ref={meshOrbRef} args={[undefined, undefined, counts[2]]}>
         <icosahedronGeometry args={[0.3, 0]} /> 
         <meshStandardMaterial {...materialProps} flatShading={true} />
+      </instancedMesh>
+
+      {/* ADDED: Cube InstancedMesh */}
+      <instancedMesh ref={meshCubeRef} args={[undefined, undefined, counts[3]]}>
+        <boxGeometry args={[0.35, 0.35, 0.35]} /> 
+        <meshStandardMaterial {...materialProps} />
+      </instancedMesh>
+
+      {/* ADDED: Sphere InstancedMesh */}
+      <instancedMesh ref={meshSphereRef} args={[undefined, undefined, counts[4]]}>
+        <sphereGeometry args={[0.25, 12, 12]} /> 
+        <meshStandardMaterial {...materialProps} />
       </instancedMesh>
 
       <instancedMesh ref={meshGlareRef} args={[undefined, undefined, glareAttributes.indices.length]}>

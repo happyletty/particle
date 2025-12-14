@@ -89,7 +89,7 @@ const CameraHandler: React.FC<CameraHandlerProps> = ({ onPinchChange, onStatusCh
       autoPlay
       playsInline
       muted
-      className="absolute bottom-4 right-4 w-32 h-24 object-cover opacity-50 rounded-lg pointer-events-none z-50 border border-white/20 transform scale-x-[-1]"
+      className="camera-feed"
     />
   );
 };
