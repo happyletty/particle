@@ -1,7 +1,7 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState, useEffect, Suspense } from 'react';
 import { useFrame, useThree, extend } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial } from '@react-three/drei';
+import { shaderMaterial, Image, useVideoTexture, Billboard } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -15,15 +15,41 @@ const TREE_HEIGHT = 14;
 const TREE_RADIUS = 8;
 
 // Particle reservations for specific structures
-// Significantly increased star count for density
 const STAR_COUNT = 800;
 const GARLAND_COUNT = 2500;
 
-// --- 0. Soft Halo Material for Yellow Blobs ---
+// --- Error Boundary for Media Gallery ---
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): ErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.error("Component Error:", error);
+  }
+
+  render() {
+    if (this.state.hasError) return this.props.fallback || null;
+    return this.props.children;
+  }
+}
+
+// --- 0. Soft Halo Material ---
 const HaloMaterial = shaderMaterial(
   {
     uTime: 0,
-    uColor: new THREE.Color(1.0, 0.6, 0.1), // Warm Orange-Yellow
+    uColor: new THREE.Color(1.0, 0.6, 0.1), 
   },
   // Vertex Shader
   `
@@ -35,7 +61,6 @@ const HaloMaterial = shaderMaterial(
       vUv = uv;
       vec4 worldPosition = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
       
-      // Extract scale from instance matrix
       vec3 scale = vec3(
         length(vec3(instanceMatrix[0].x, instanceMatrix[0].y, instanceMatrix[0].z)),
         length(vec3(instanceMatrix[1].x, instanceMatrix[1].y, instanceMatrix[1].z)),
@@ -43,19 +68,14 @@ const HaloMaterial = shaderMaterial(
       );
       vScale = scale.x;
 
-      // Billboard logic
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
       
-      // Make halo larger relative to the particle size
       float size = vScale * 6.0; 
-      
-      // Add subtle breathing to the halo
       float breathe = 1.0 + 0.15 * sin(uTime * 3.0 + worldPosition.x * 10.0 + worldPosition.y * 5.0);
       size *= breathe;
 
       vec3 pos = worldPosition.xyz + (camRight * position.x + camUp * position.y) * size;
-      
       gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.0);
     }
   `,
@@ -66,13 +86,11 @@ const HaloMaterial = shaderMaterial(
 
     void main() {
       float d = length(vUv - 0.5);
-      // Soft circular glow
       float alpha = smoothstep(0.5, 0.0, d);
-      alpha = pow(alpha, 3.0); // Increase falloff for a "bulb" look
+      alpha = pow(alpha, 3.0); 
       
       if (alpha < 0.01) discard;
       
-      // Brighter core
       vec3 core = vec3(1.0, 0.95, 0.8);
       vec3 col = mix(uColor, core, alpha * 0.4);
       
@@ -92,7 +110,10 @@ const MeteorMaterial = shaderMaterial(
     varying vec2 vUv;
     void main() {
       vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+      // Use standard modelViewMatrix combined with instanceMatrix
+      // This works because Three.js handles the instanceMatrix attribute automatically for InstancedMesh
+      vec4 mvPosition = viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
     }
   `,
   // Fragment
@@ -100,9 +121,7 @@ const MeteorMaterial = shaderMaterial(
     varying vec2 vUv;
     uniform vec3 uColor;
     void main() {
-      // Gradient fade from head (right) to tail (left)
       float alpha = smoothstep(0.0, 1.0, vUv.x);
-      // Make it thinner at the tail
       float shape = 1.0 - abs(vUv.y - 0.5) * 2.0;
       alpha *= shape;
       
@@ -127,8 +146,6 @@ const useDiffractionTexture = () => {
     const cy = size / 2;
 
     ctx.clearRect(0, 0, size, size);
-    
-    // Use 'screen' blending for light accumulation simulation
     ctx.globalCompositeOperation = 'screen'; 
 
     const drawSpike = (length: number, width: number, angleDeg: number, colorStart: string, colorEnd: string) => {
@@ -143,13 +160,11 @@ const useDiffractionTexture = () => {
       grad.addColorStop(1, 'rgba(0,0,0,0)');
 
       ctx.fillStyle = grad;
-      
       ctx.beginPath();
       ctx.moveTo(0, -width);
       ctx.lineTo(length, 0);
       ctx.lineTo(0, width);
       ctx.fill();
-      
       ctx.restore();
     };
 
@@ -157,7 +172,6 @@ const useDiffractionTexture = () => {
     const warmGlow = 'rgba(255, 200, 100, 0.5)';
     const spectral = 'rgba(150, 200, 255, 0.3)'; 
 
-    // 1. Compact, intense Core
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.04);
     glow.addColorStop(0, 'rgba(255, 255, 255, 1)');
     glow.addColorStop(0.5, 'rgba(255, 240, 220, 0.4)');
@@ -167,13 +181,11 @@ const useDiffractionTexture = () => {
     ctx.arc(cx, cy, size * 0.04, 0, Math.PI * 2);
     ctx.fill();
 
-    // 2. Sharp Aperture Spikes
     drawSpike(size * 0.4, 2.0, 0, coreWhite, warmGlow);
     drawSpike(size * 0.4, 2.0, 90, coreWhite, warmGlow);
     drawSpike(size * 0.4, 2.0, 180, coreWhite, warmGlow);
     drawSpike(size * 0.4, 2.0, 270, coreWhite, warmGlow);
 
-    // 3. Faint Diagonals (Anamorphic hint)
     const diagLen = size * 0.2;
     drawSpike(diagLen, 1.0, 45, warmGlow, spectral);
     drawSpike(diagLen, 1.0, 135, warmGlow, spectral);
@@ -205,45 +217,33 @@ const PhysicalGlareMaterial = shaderMaterial(
 
     void main() {
       vUv = uv;
-      
-      // 1. Calculate World Position of the Particle Center
       vec4 worldPosition = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
       
-      // 2. Reconstruct World Normal of the "Reflective Facet"
       mat3 worldRotation = mat3(modelMatrix) * mat3(instanceMatrix);
       vec3 worldNormal = normalize(worldRotation * aRandomNormal);
 
-      // 3. Calculate Scale
       float particleScale = length(worldRotation[0]);
-
-      // 4. Offset to Surface
       vec3 surfacePos = worldPosition.xyz + (worldNormal * particleScale * 0.5);
 
-      // 5. Lighting Physics (Blinn-Phong)
       vec3 viewDir = normalize(uCamPos - surfacePos);
       vec3 lightDir = normalize(uLightPos - surfacePos);
       vec3 halfVector = normalize(viewDir + lightDir); 
 
       float NdotH = max(0.0, dot(worldNormal, halfVector));
-      
       float specular = pow(NdotH, 60.0); 
       specular += pow(NdotH, 20.0) * 0.15;
 
-      // REVERTED: Back to smooth breathing sine wave (removed high-freq jitter)
       float breathe = sin(uTime * 3.0 + worldPosition.x * 0.5) * 0.3 + 0.7;
       vIntensity = specular * breathe * 4.0;
 
-      // 6. Billboard Logic
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
 
       float glareSize = particleScale * (2.0 + vIntensity * 1.5); 
-      
       vec3 offset = (camRight * position.x + camUp * position.y) * glareSize;
       vec3 finalPos = surfacePos + offset;
       
       finalPos += viewDir * (particleScale * 0.1);
-      
       gl_Position = projectionMatrix * viewMatrix * vec4(finalPos, 1.0);
     }
   `,
@@ -255,12 +255,10 @@ const PhysicalGlareMaterial = shaderMaterial(
 
     void main() {
       vec4 texColor = texture2D(uTex, vUv);
-      
       if (texColor.a < 0.01 || vIntensity < 0.01) discard;
 
       vec3 hotWhite = vec3(1.0, 1.0, 1.0);
       vec3 golden   = vec3(1.0, 0.8, 0.1); 
-      
       vec3 finalColor = mix(golden, hotWhite, texColor.a * vIntensity * 0.5);
 
       gl_FragColor = vec4(finalColor, texColor.a * min(vIntensity, 1.5));
@@ -269,6 +267,155 @@ const PhysicalGlareMaterial = shaderMaterial(
 );
 
 extend({ PhysicalGlareMaterial, HaloMaterial, MeteorMaterial });
+
+// --- Media Gallery Types & Data ---
+type MediaType = 'image' | 'video';
+
+interface MediaItem {
+  id: number;
+  type: MediaType;
+  url: string;
+  position?: THREE.Vector3;
+}
+
+const MEDIA_CONTENT: MediaItem[] = [
+  { id: 1, type: 'image', url: 'https://images.unsplash.com/photo-1544967082-d9d3fdd01a15?w=500&q=80' }, 
+  { id: 2, type: 'video', url: 'https://cdn.pixabay.com/video/2019/12/12/29965-379255282_large.mp4' }, 
+  { id: 3, type: 'image', url: 'https://images.unsplash.com/photo-1512474932049-78ac69ede12c?w=500&q=80' }, 
+  { id: 4, type: 'image', url: 'https://images.unsplash.com/photo-1482517967863-00e15c9b4499?w=500&q=80' }, 
+  { id: 5, type: 'video', url: 'https://cdn.pixabay.com/video/2020/12/16/59807-495146039_tiny.mp4' }, 
+  { id: 6, type: 'image', url: 'https://images.unsplash.com/photo-1576919228236-a097c32a58be?w=500&q=80' }, 
+  { id: 7, type: 'image', url: 'https://images.unsplash.com/photo-1514302240736-b1fee59858eb?w=500&q=80' }, 
+];
+
+const calculateMediaPositions = () => {
+  const items = [...MEDIA_CONTENT];
+  const count = items.length;
+  const minY = -3;
+  const maxY = 3;
+  const yStep = (maxY - minY) / count;
+
+  return items.map((item, index) => {
+    const y = minY + index * yStep + (Math.random() - 0.5); 
+    const hBase = TREE_HEIGHT / 2;
+    const relHeight = (y + hBase) / TREE_HEIGHT;
+    const r = (TREE_RADIUS * (1 - relHeight)) + 0.5; 
+
+    const theta = index * 2.4; 
+    const x = r * Math.cos(theta);
+    const z = r * Math.sin(theta);
+    
+    return { ...item, position: new THREE.Vector3(x, y, z) };
+  });
+};
+
+const VideoPlane: React.FC<{ url: string; active: boolean; opacity?: number }> = ({ url, active, opacity = 1 }) => {
+  const texture = useVideoTexture(url, { muted: true, loop: true, start: true, playsInline: true });
+  useEffect(() => {
+    if (active) texture.image.play().catch(() => {});
+    else texture.image.pause();
+  }, [active, texture]);
+
+  return (
+    <mesh>
+      <planeGeometry args={[1, 1]} />
+      <meshBasicMaterial map={texture} toneMapped={false} transparent opacity={opacity} />
+    </mesh>
+  );
+};
+
+const MediaGallery: React.FC<{ shape: ShapeType }> = ({ shape }) => {
+  const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
+  const itemsWithPos = useMemo(() => calculateMediaPositions(), []);
+  
+  const groupRef = useRef<THREE.Group>(null);
+  const opacityRef = useRef(0);
+
+  useFrame((state, delta) => {
+    if (!groupRef.current) return;
+    const targetOpacity = shape === ShapeType.TREE ? 1 : 0;
+    opacityRef.current = THREE.MathUtils.lerp(opacityRef.current, targetOpacity, delta * 3);
+    groupRef.current.visible = opacityRef.current > 0.01;
+  });
+
+  const handleItemClick = (e: any, item: MediaItem) => {
+    e.stopPropagation();
+    if (shape !== ShapeType.TREE) return;
+    setActiveItem(item);
+  };
+
+  const closeExpanded = (e: any) => {
+    e.stopPropagation();
+    setActiveItem(null);
+  };
+
+  return (
+    <>
+      <group ref={groupRef}>
+        {itemsWithPos.map((item) => (
+          <Billboard
+            key={item.id}
+            position={item.position}
+            follow={true}
+            lockX={false}
+            lockY={false}
+            lockZ={false}
+          >
+             <group scale={0.8}>
+                {item.type === 'image' ? (
+                  <Image url={item.url} transparent opacity={0.9} scale={[1.5, 1.5]} toneMapped={false} />
+                ) : (
+                  <mesh>
+                    <planeGeometry args={[1.5, 1.5]} />
+                    <meshBasicMaterial color="#ffcc00" opacity={0.8} transparent />
+                    <mesh position={[0,0,0.01]}>
+                        <circleGeometry args={[0.3, 3]} />
+                        <meshBasicMaterial color="black" />
+                    </mesh>
+                  </mesh>
+                )}
+                <mesh position={[0, 0, -0.01]}>
+                    <planeGeometry args={[1.7, 1.7]} />
+                    <meshBasicMaterial color="#fff" opacity={0.6} transparent />
+                </mesh>
+             </group>
+             <mesh visible={false} onClick={(e) => handleItemClick(e, item)}>
+                <planeGeometry args={[2.5, 2.5]} />
+                <meshBasicMaterial color="red" />
+             </mesh>
+          </Billboard>
+        ))}
+      </group>
+
+      {activeItem && (
+        <group>
+            <mesh position={[0, 0, 20]} onClick={closeExpanded}>
+                <planeGeometry args={[100, 100]} />
+                <meshBasicMaterial color="black" transparent opacity={0.8} />
+            </mesh>
+            
+            <Billboard position={[0, 0, 25]} follow={true}>
+                 <group scale={8}>
+                    {activeItem.type === 'image' ? (
+                        <Image url={activeItem.url} scale={[1.6, 1]} toneMapped={false} />
+                    ) : (
+                        <group scale={[1.6, 1, 1]}>
+                             <Suspense fallback={<meshBasicMaterial color="gray" />}>
+                                <VideoPlane url={activeItem.url} active={true} />
+                             </Suspense>
+                        </group>
+                    )}
+                    <mesh position={[0, -0.7, 0]}>
+                       <planeGeometry args={[1, 0.1]} />
+                       <meshBasicMaterial color="black" transparent opacity={0} />
+                    </mesh>
+                 </group>
+            </Billboard>
+        </group>
+      )}
+    </>
+  );
+};
 
 export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
   const meshDiamondRef = useRef<THREE.InstancedMesh>(null); 
@@ -280,7 +427,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
   const glareMatRef = useRef<THREE.ShaderMaterial>(null);
   const haloMatRef = useRef<THREE.ShaderMaterial>(null);
   
-  // Controls visibility of halos based on shape (1 = full tree, 0 = no halo in galaxy)
   const haloScaleFactor = useRef(0);
 
   const starTexture = useDiffractionTexture();
@@ -313,9 +459,8 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
     const branches = 5; 
     const spin = 1.5;   
 
-    // Track last halo position to prevent clumping
     let lastHaloIndex = -100;
-    const MIN_HALO_GAP = 15; // Minimum particles between halos
+    const MIN_HALO_GAP = 15; 
 
     for (let i = 0; i < TOTAL_COUNT; i++) {
       const shapeType = Math.floor(Math.random() * 3);
@@ -330,10 +475,8 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
       ).normalize();
       gNormals.push(v.x, v.y, v.z);
 
-      // --- GALAXY POSITIONS ---
       const t = Math.random();
       const radius = Math.pow(t, 1.2) * GALAXY_RADIUS; 
-      // DistRatio is needed for both Galaxy colors and Tree body scaling
       const distRatio = radius / GALAXY_RADIUS;
       
       const branchAngle = (i % branches) * ((2 * Math.PI) / branches);
@@ -346,24 +489,19 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
       let gz = Math.sin(angle) * radius;
       let gy = (Math.random() - 0.5) * (2 + (GALAXY_RADIUS - radius) * 0.2) * 1.5;
 
-      // --- TREE POSITIONS & COLORS ---
       let tx, ty, tz;
       let tColor = new THREE.Color();
       let specificScaleMultiplier = 1.0;
 
-      // 3. Top Star Shape
       if (i < STAR_COUNT) {
-         // SPECIAL: Index 0 is the center "Mega Halo"
          if (i === 0) {
              tx = 0;
              ty = (TREE_HEIGHT / 2) + 0.8;
              tz = 0;
-             tColor.set('#ffffff'); // Pure white
-             // Make this halo huge compared to others
+             tColor.set('#ffffff'); 
              specificScaleMultiplier = 5.0; 
-             hIndices.push(i); // Add to halo list
+             hIndices.push(i); 
              
-             // Override galaxy pos to center to look nice during transition
              gx = 0; gy = 0; gz = 0;
          } else {
              const rOuter = 0.9;  
@@ -403,10 +541,9 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
              specificScaleMultiplier = sizeGradient * (0.3 + Math.random() * 0.4);
          }
       } 
-      // 4. Garland / Ribbon (EXTREMELY DENSE)
       else if (i < STAR_COUNT + GARLAND_COUNT) {
          const garlandIndex = i - STAR_COUNT;
-         const progress = garlandIndex / GARLAND_COUNT; // 0 to 1 (Top to Bottom)
+         const progress = garlandIndex / GARLAND_COUNT; 
          
          const h = TREE_HEIGHT * (1 - progress); 
          const relHeight = h / TREE_HEIGHT;
@@ -414,7 +551,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
          const pathRadius = (TREE_RADIUS * (1 - relHeight)) + 0.1; 
          
          const spirals = 3.0;
-         
          const baseAngle = (progress * Math.PI * 2 * spirals);
 
          const spread = 0.8; 
@@ -426,12 +562,9 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
          tz = Math.sin(baseAngle + aScatter) * (pathRadius + rScatter);
          ty = h - (TREE_HEIGHT / 2) + hScatter;
          
-         // Highlight Logic (MODIFIED for sparsity)
          let isHalo = false;
          
-         // Only consider adding a halo if we are far enough from the last one
          if (i - lastHaloIndex > MIN_HALO_GAP) {
-             // 4% chance (very sparse)
              if (Math.random() < 0.04) {
                  isHalo = true;
                  lastHaloIndex = i;
@@ -448,7 +581,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
              specificScaleMultiplier = 0.5;
          }
       }
-      // Tree Body
       else {
           const h = Math.random() * TREE_HEIGHT;
           const relHeight = h / TREE_HEIGHT;
@@ -473,7 +605,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
           specificScaleMultiplier = (1 - distRatio * 0.4);
       }
 
-      // --- GALAXY COLORS ---
       let gColor = new THREE.Color();
       const noise = Math.random();
 
@@ -532,7 +663,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
 
     const lerpFactor = THREE.MathUtils.clamp(delta * 2.0, 0, 1);
     
-    // Smoothly transition halo visibility: 1.0 for TREE, 0.0 for GALAXY
     const targetHaloScale = shape === ShapeType.TREE ? 1.0 : 0.0;
     haloScaleFactor.current = THREE.MathUtils.lerp(haloScaleFactor.current, targetHaloScale, delta * 3.0);
 
@@ -598,7 +728,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
             tempObject.position.copy(particle.currentPos);
             tempObject.rotation.set(0, 0, 0); 
             
-            // Multiply particle scale by the global halo fade factor (0 for galaxy, 1 for tree)
             const s = particle.scale * haloScaleFactor.current;
             tempObject.scale.setScalar(s);
             
@@ -670,6 +799,13 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
             blending={THREE.AdditiveBlending}
         />
       </instancedMesh>
+
+      {/* --- ADDED MEDIA GALLERY WITH ERROR BOUNDARY & ISOLATED SUSPENSE --- */}
+      <ErrorBoundary fallback={null}>
+         <Suspense fallback={null}>
+            <MediaGallery shape={shape} />
+         </Suspense>
+      </ErrorBoundary>
     </group>
   );
 };
@@ -682,10 +818,7 @@ export const FloatingParticles: React.FC = () => {
   const dustData = useMemo(() => {
     const data = [];
     for (let i = 0; i < DUST_COUNT; i++) {
-      // MODIFIED: Radius starts from near 0 to 80 (No hole)
-      // Using sqrt for more uniform distribution (less clumping in center than linear)
       const r = Math.sqrt(Math.random()) * 80; 
-      
       const theta = Math.random() * Math.PI * 2;
       const ySpread = (Math.random() - 0.5) * 40; 
       
@@ -694,7 +827,6 @@ export const FloatingParticles: React.FC = () => {
       const y = ySpread;
       const speed = (Math.random() * 0.01) + 0.005; 
       
-      // MODIFIED: Brighter Silver/White Color
       const color = new THREE.Color('#e0e0e0').lerp(new THREE.Color('#ffffff'), Math.random());
 
       data.push({ 
@@ -717,13 +849,11 @@ export const FloatingParticles: React.FC = () => {
   useFrame((state, delta) => {
     if (!meshRef.current) return;
     dustData.forEach((d, i) => {
-      // MODIFIED: Reduced speed by 50% (was 0.5)
       d.angle += d.speed * delta * 0.25; 
       const nx = Math.cos(d.angle) * d.radius;
       const nz = Math.sin(d.angle) * d.radius;
       const time = state.clock.getElapsedTime();
       
-      // MODIFIED: Reduced vertical bobbing frequency by 50% (was 0.5)
       const ny = d.y + Math.sin(time * 0.25 + d.radius) * 2;
       
       tempObject.position.set(nx, ny, nz);
