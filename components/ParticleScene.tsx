@@ -6,6 +6,7 @@ import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
   shape: ShapeType;
+  showMediaOnly: boolean;
 }
 
 // Increased total count to support dense star and dense garland
@@ -287,14 +288,24 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
+// Updated with images that resemble the user's provided photos (Travel, Selfies, Snow, City)
 const MEDIA_CONTENT: MediaItem[] = [
-  { id: 1, type: 'image', url: 'https://images.unsplash.com/photo-1544967082-d9d3fdd01a15?w=500&q=80' }, 
-  { id: 2, type: 'video', url: 'https://cdn.pixabay.com/video/2019/12/12/29965-379255282_large.mp4' }, 
-  { id: 3, type: 'image', url: 'https://images.unsplash.com/photo-1512474932049-78ac69ede12c?w=500&q=80' }, 
-  { id: 4, type: 'image', url: 'https://images.unsplash.com/photo-1482517967863-00e15c9b4499?w=500&q=80' }, 
-  { id: 5, type: 'video', url: 'https://cdn.pixabay.com/video/2020/12/16/59807-495146039_tiny.mp4' }, 
-  { id: 6, type: 'image', url: 'https://images.unsplash.com/photo-1576919228236-a097c32a58be?w=500&q=80' }, 
-  { id: 7, type: 'image', url: 'https://images.unsplash.com/photo-1514302240736-b1fee59858eb?w=500&q=80' }, 
+  // Old street / Stairs
+  { id: 1, type: 'image', url: 'https://images.unsplash.com/photo-1516483638261-f4dbaf036963?w=600&q=80' },
+  // Couple / Portrait
+  { id: 2, type: 'image', url: 'https://images.unsplash.com/photo-1520466809213-7b9a56adcd45?w=600&q=80' },
+  // Man in cap / Portrait close up
+  { id: 3, type: 'image', url: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=600&q=80' },
+  // City / Tower (Shanghai vibes)
+  { id: 4, type: 'image', url: 'https://images.unsplash.com/photo-1474181487882-5abf3f0ba6c3?w=600&q=80' },
+  // Snow Mountains
+  { id: 5, type: 'image', url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=600&q=80' },
+  // Desert / Travel
+  { id: 6, type: 'image', url: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=600&q=80' },
+  // Group / Happy
+  { id: 7, type: 'image', url: 'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?w=600&q=80' },
+  // Video memory
+  { id: 8, type: 'video', url: 'https://cdn.pixabay.com/video/2019/12/12/29965-379255282_large.mp4' },
 ];
 
 const calculateMediaPositions = () => {
@@ -335,7 +346,8 @@ const BaseCube: React.FC<{
       groupRef.current.rotation.y += delta * 0.5;
       groupRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.5 + item.id) * 0.2;
       
-      // Visibility scale logic
+      // Visibility scale logic: 
+      // If visible is true (either Tree mode OR showMediaOnly mode), we scale up.
       const targetScale = visible ? (hovered ? 1.2 : 1.0) : 0;
       scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 5);
       
@@ -406,14 +418,19 @@ const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
   );
 };
 
-const MediaGallery: React.FC<{ shape: ShapeType }> = ({ shape }) => {
+// MODIFIED: MediaGallery now accepts showMediaOnly prop
+const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ shape, showMediaOnly }) => {
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
   const itemsWithPos = useMemo(() => calculateMediaPositions(), []);
   
   const isTree = shape === ShapeType.TREE;
+  
+  // MODIFIED: Items are visible if in Tree mode OR if Media Only (Debug) mode is active
+  const areItemsVisible = isTree || showMediaOnly;
 
   const handleItemClick = (e: any, item: MediaItem) => {
-    if (!isTree) return;
+    // Enable clicking in both tree mode and media-only mode
+    if (!areItemsVisible) return;
     setActiveItem(item);
   };
 
@@ -428,9 +445,9 @@ const MediaGallery: React.FC<{ shape: ShapeType }> = ({ shape }) => {
         {itemsWithPos.map((item) => (
            <React.Fragment key={item.id}>
              {item.type === 'video' ? (
-                <VideoCube item={item} onClick={handleItemClick} visible={isTree} />
+                <VideoCube item={item} onClick={handleItemClick} visible={areItemsVisible} />
              ) : (
-                <ImageCube item={item} onClick={handleItemClick} visible={isTree} />
+                <ImageCube item={item} onClick={handleItemClick} visible={areItemsVisible} />
              )}
            </React.Fragment>
         ))}
@@ -463,7 +480,7 @@ const MediaGallery: React.FC<{ shape: ShapeType }> = ({ shape }) => {
   );
 };
 
-export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
+export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOnly }) => {
   const meshDiamondRef = useRef<THREE.InstancedMesh>(null); 
   const meshShardRef = useRef<THREE.InstancedMesh>(null);   
   const meshOrbRef = useRef<THREE.InstancedMesh>(null);
@@ -839,34 +856,34 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
 
   return (
     <group>
-      <instancedMesh ref={meshDiamondRef} args={[undefined, undefined, counts[0]]}>
+      <instancedMesh ref={meshDiamondRef} args={[undefined, undefined, counts[0]]} visible={!showMediaOnly}>
         <octahedronGeometry args={[0.5, 0]} /> 
         <meshStandardMaterial {...materialProps} />
       </instancedMesh>
 
-      <instancedMesh ref={meshShardRef} args={[undefined, undefined, counts[1]]}>
+      <instancedMesh ref={meshShardRef} args={[undefined, undefined, counts[1]]} visible={!showMediaOnly}>
         <tetrahedronGeometry args={[0.4, 0]} /> 
         <meshStandardMaterial {...materialProps} />
       </instancedMesh>
 
-      <instancedMesh ref={meshOrbRef} args={[undefined, undefined, counts[2]]}>
+      <instancedMesh ref={meshOrbRef} args={[undefined, undefined, counts[2]]} visible={!showMediaOnly}>
         <icosahedronGeometry args={[0.3, 0]} /> 
         <meshStandardMaterial {...materialProps} flatShading={true} />
       </instancedMesh>
 
       {/* ADDED: Cube InstancedMesh */}
-      <instancedMesh ref={meshCubeRef} args={[undefined, undefined, counts[3]]}>
+      <instancedMesh ref={meshCubeRef} args={[undefined, undefined, counts[3]]} visible={!showMediaOnly}>
         <boxGeometry args={[0.35, 0.35, 0.35]} /> 
         <meshStandardMaterial {...materialProps} />
       </instancedMesh>
 
       {/* ADDED: Sphere InstancedMesh */}
-      <instancedMesh ref={meshSphereRef} args={[undefined, undefined, counts[4]]}>
+      <instancedMesh ref={meshSphereRef} args={[undefined, undefined, counts[4]]} visible={!showMediaOnly}>
         <sphereGeometry args={[0.25, 12, 12]} /> 
         <meshStandardMaterial {...materialProps} />
       </instancedMesh>
 
-      <instancedMesh ref={meshGlareRef} args={[undefined, undefined, glareAttributes.indices.length]}>
+      <instancedMesh ref={meshGlareRef} args={[undefined, undefined, glareAttributes.indices.length]} visible={!showMediaOnly}>
         <planeGeometry args={[1, 1]}>
              <instancedBufferAttribute 
                 attach="attributes-aRandomNormal" 
@@ -883,7 +900,7 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
         />
       </instancedMesh>
       
-      <instancedMesh ref={meshHaloRef} args={[undefined, undefined, haloIndices.length]}>
+      <instancedMesh ref={meshHaloRef} args={[undefined, undefined, haloIndices.length]} visible={!showMediaOnly}>
         <planeGeometry args={[1, 1]} />
         {/* @ts-ignore */}
         <haloMaterial 
@@ -897,14 +914,14 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
       {/* --- ADDED MEDIA GALLERY WITH ERROR BOUNDARY & ISOLATED SUSPENSE --- */}
       <ErrorBoundary fallback={null}>
          <Suspense fallback={null}>
-            <MediaGallery shape={shape} />
+            <MediaGallery shape={shape} showMediaOnly={showMediaOnly} />
          </Suspense>
       </ErrorBoundary>
     </group>
   );
 };
 
-export const FloatingParticles: React.FC = () => {
+export const FloatingParticles: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const DUST_COUNT = 2000;
   const tempObject = new THREE.Object3D();
@@ -962,7 +979,7 @@ export const FloatingParticles: React.FC = () => {
   });
 
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, DUST_COUNT]}>
+    <instancedMesh ref={meshRef} args={[undefined, undefined, DUST_COUNT]} visible={visible}>
       <octahedronGeometry args={[0.5, 0]} />
       <meshStandardMaterial 
         roughness={0.0} 
@@ -976,7 +993,7 @@ export const FloatingParticles: React.FC = () => {
   );
 };
 
-export const ShootingStars: React.FC = () => {
+export const ShootingStars: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
     // Increased pool size to 6 to handle up to 3 active + overlapping fade-outs
     const count = 6; 
     const meshRef = useRef<THREE.InstancedMesh>(null);
@@ -1165,7 +1182,7 @@ export const ShootingStars: React.FC = () => {
     });
 
     return (
-        <instancedMesh ref={meshRef} args={[undefined, undefined, count]}>
+        <instancedMesh ref={meshRef} args={[undefined, undefined, count]} visible={visible}>
             {/* Length along X-axis (16), Width along Y-axis (0.4) */}
             <planeGeometry args={[16, 0.4]} />
             {/* @ts-ignore */}

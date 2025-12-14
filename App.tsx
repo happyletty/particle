@@ -9,6 +9,8 @@ import { Loader2 } from 'lucide-react';
 const App: React.FC = () => {
   const [isCameraPinching, setIsCameraPinching] = useState(false);
   const [manualToggle, setManualToggle] = useState(false);
+  // ADDED: State for media isolation mode
+  const [showMediaOnly, setShowMediaOnly] = useState(false);
   
   const [status, setStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
@@ -68,13 +70,15 @@ const App: React.FC = () => {
           <pointLight position={[0, 0, 0]} intensity={2} color="#ffaa00" distance={25} /> 
           <pointLight position={[20, -10, 0]} intensity={3} color="#4fc3f7" distance={40} /> 
           
-          {/* Reduced star background radius */}
-          <Stars radius={80} depth={50} count={1000} factor={4} saturation={0} fade speed={0.5} />
+          {/* Reduced star background radius. Hidden in Media Only mode. */}
+          {!showMediaOnly && (
+             <Stars radius={80} depth={50} count={1000} factor={4} saturation={0} fade speed={0.5} />
+          )}
           
           <Suspense fallback={null}>
-             <ParticleScene shape={currentShape} />
-             <FloatingParticles />
-             <ShootingStars />
+             <ParticleScene shape={currentShape} showMediaOnly={showMediaOnly} />
+             <FloatingParticles visible={!showMediaOnly} />
+             <ShootingStars visible={!showMediaOnly} />
           </Suspense>
           
           <OrbitControls 
@@ -82,7 +86,7 @@ const App: React.FC = () => {
             enableZoom={true} 
             minDistance={10} 
             maxDistance={80}
-            autoRotate={currentShape === ShapeType.GALAXY}
+            autoRotate={currentShape === ShapeType.GALAXY && !showMediaOnly}
             autoRotateSpeed={0.15}
           />
         </Canvas>
@@ -97,6 +101,36 @@ const App: React.FC = () => {
            </div>
         )}
       </div>
+
+      {/* ADDED: Top Right Debug Button */}
+      <button 
+        style={{
+            position: 'absolute',
+            top: '1rem',
+            right: '1rem',
+            zIndex: 60,
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
+            background: showMediaOnly ? '#ef4444' : 'rgba(255, 255, 255, 0.15)',
+            color: 'white',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            backdropFilter: 'blur(4px)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: 'bold',
+            fontSize: '1.2rem'
+        }}
+        onClick={(e) => {
+            e.stopPropagation();
+            setShowMediaOnly(!showMediaOnly);
+        }}
+        title="Toggle Media Only Mode"
+      >
+        D
+      </button>
 
       <CameraHandler 
         onPinchChange={setIsCameraPinching} 
