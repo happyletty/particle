@@ -1,20 +1,52 @@
-import React, { useState, Suspense } from 'react';
+import React, { useState, Suspense, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import ParticleScene from './components/ParticleScene';
 import CameraHandler from './components/CameraHandler';
 import { ShapeType } from './types';
-import { Hand, Trees, Sparkles, AlertCircle, Loader2 } from 'lucide-react';
+import { Sparkles, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [currentShape, setCurrentShape] = useState<ShapeType>(ShapeType.GALAXY);
+  // We separate sources of input
+  const [isCameraPinching, setIsCameraPinching] = useState(false);
+  const [manualToggle, setManualToggle] = useState(false); // Changed to toggle state
+  
   const [status, setStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
 
+  // Drag detection refs
+  const dragStart = useRef({ x: 0, y: 0 });
+
+  // Combine inputs: either camera pinch OR manual toggle is active
+  const currentShape = (isCameraPinching || manualToggle) ? ShapeType.TREE : ShapeType.GALAXY;
+  
+  // Logic to hide loader: If ready OR if there's an error (we just hide loader silently on error)
   const isReady = status === "Ready";
+  const hasError = !!error;
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    dragStart.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    // Calculate distance moved
+    const dx = e.clientX - dragStart.current.x;
+    const dy = e.clientY - dragStart.current.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Only toggle if it's a click (not a drag)
+    if (distance < 5) {
+      setManualToggle(prev => !prev);
+    }
+  };
 
   return (
-    <div className="relative w-full h-[100dvh] bg-black text-white overflow-hidden font-sans">
+    <div 
+      className="relative w-full h-[100dvh] bg-black text-white overflow-hidden font-sans cursor-pointer"
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      title="Click to toggle shape"
+    >
       
       {/* 3D Scene Layer */}
       <div className="absolute inset-0 z-0">
@@ -40,79 +72,34 @@ const App: React.FC = () => {
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-6">
         
         {/* Header */}
-        <header className="flex items-center space-x-3">
-          <div className="p-2 bg-indigo-600 rounded-lg shadow-lg shadow-indigo-500/30">
-            <Sparkles className="w-6 h-6 text-white" />
+        <header className="flex items-center space-x-3 opacity-60 hover:opacity-100 transition-opacity duration-300">
+          <div className="p-2 bg-indigo-600/50 rounded-lg shadow-lg shadow-indigo-500/20 backdrop-blur-sm">
+            <Sparkles className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 to-purple-400">
+            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 to-purple-400">
               Nebula Morph
             </h1>
-            <p className="text-xs text-indigo-300 opacity-80">
-              Powered by Three.js & MediaPipe
-            </p>
           </div>
         </header>
 
-        {/* Status / Instructions */}
+        {/* Status Loader Only - No permanent status pill */}
         <div className="flex flex-col items-center justify-center space-y-6">
-            {!isReady && !error && (
-               <div className="flex items-center space-x-2 bg-black/60 backdrop-blur-md px-6 py-3 rounded-full border border-white/10">
-                 <Loader2 className="w-5 h-5 animate-spin text-indigo-400" />
-                 <span className="text-sm font-medium">{status}</span>
+            {!isReady && !hasError && (
+               <div className="flex items-center space-x-2 bg-black/40 backdrop-blur-md px-6 py-3 rounded-full border border-white/5">
+                 <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                 <span className="text-xs font-medium text-white/50">{status}</span>
                </div>
             )}
-
-            {error && (
-              <div className="flex items-center space-x-2 bg-red-900/80 backdrop-blur-md px-6 py-4 rounded-xl border border-red-500/50 max-w-md">
-                 <AlertCircle className="w-6 h-6 text-red-300 flex-shrink-0" />
-                 <span className="text-sm text-red-100">{error}</span>
-              </div>
-            )}
-
-            {isReady && (
-              <div className="transition-all duration-500 ease-in-out transform">
-                  <div className={`flex items-center space-x-4 bg-black/40 backdrop-blur-xl px-8 py-4 rounded-2xl border border-white/10 shadow-2xl ${currentShape === ShapeType.TREE ? 'border-emerald-500/50 bg-emerald-900/20' : ''}`}>
-                    
-                    {/* Status Indicator Icon */}
-                    <div className={`p-3 rounded-full transition-colors duration-300 ${currentShape === ShapeType.TREE ? 'bg-emerald-500 text-white' : 'bg-white/10 text-white/50'}`}>
-                       <Trees className="w-6 h-6" />
-                    </div>
-
-                    <div className="flex flex-col">
-                      <span className="text-xs uppercase tracking-wider text-white/40 font-bold mb-1">
-                        Current State
-                      </span>
-                      <span className={`text-xl font-bold transition-all duration-300 ${currentShape === ShapeType.TREE ? 'text-emerald-300' : 'text-indigo-300'}`}>
-                        {currentShape === ShapeType.TREE ? 'Christmas Tree' : 'Cosmic Galaxy'}
-                      </span>
-                    </div>
-
-                    <div className="h-8 w-px bg-white/10 mx-4" />
-
-                    <div className="flex items-center space-x-3 opacity-90">
-                       <Hand className="w-5 h-5 text-indigo-300" />
-                       <span className="text-sm max-w-[140px] leading-tight">
-                         Pinch 5 fingers to transform
-                       </span>
-                    </div>
-
-                  </div>
-              </div>
-            )}
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-between items-end">
-           <div className="text-xs text-white/30 max-w-xs">
-              Allow camera access. Keep hand 1-2 feet from camera. Bring all 5 fingertips together.
-           </div>
-        </div>
+        {/* Empty Footer */}
+        <div className="h-4"></div>
       </div>
 
       {/* Logic Container */}
       <CameraHandler 
-        onShapeChange={setCurrentShape} 
+        onPinchChange={setIsCameraPinching} 
         onStatusChange={setStatus}
         onError={setError}
       />

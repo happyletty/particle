@@ -1,14 +1,14 @@
 import React, { useEffect, useRef } from 'react';
 import { initializeHandLandmarker, detectGestures } from '../services/gestureService';
-import { ShapeType } from '../types';
+import { ShapeType } from '../types'; // Kept for type safety if needed, though we emit booleans now
 
 interface CameraHandlerProps {
-  onShapeChange: (shape: ShapeType) => void;
+  onPinchChange: (isPinching: boolean) => void;
   onStatusChange: (status: string) => void;
   onError: (error: string) => void;
 }
 
-const CameraHandler: React.FC<CameraHandlerProps> = ({ onShapeChange, onStatusChange, onError }) => {
+const CameraHandler: React.FC<CameraHandlerProps> = ({ onPinchChange, onStatusChange, onError }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const requestRef = useRef<number>();
   const lastGestureTime = useRef<number>(0);
@@ -17,7 +17,7 @@ const CameraHandler: React.FC<CameraHandlerProps> = ({ onShapeChange, onStatusCh
     const startCamera = async () => {
       // Check for Secure Context (Required for getUserMedia on non-localhost)
       if (!window.isSecureContext) {
-        onError("Camera requires HTTPS or Localhost. Use a secure connection.");
+        onError("Camera requires HTTPS or Localhost. Use Mouse/Touch instead.");
         return;
       }
 
@@ -25,7 +25,7 @@ const CameraHandler: React.FC<CameraHandlerProps> = ({ onShapeChange, onStatusCh
       const success = await initializeHandLandmarker();
       
       if (!success) {
-        onError("Failed to load hand tracking model.");
+        onError("Failed to load model. Use Mouse/Touch instead.");
         return;
       }
 
@@ -50,7 +50,7 @@ const CameraHandler: React.FC<CameraHandlerProps> = ({ onShapeChange, onStatusCh
         }
       } catch (err) {
         console.error(err);
-        onError("Camera permission denied. Ensure you are on HTTPS.");
+        onError("Camera denied or unavailable. Use Mouse/Touch instead.");
       }
     };
 
@@ -70,17 +70,13 @@ const CameraHandler: React.FC<CameraHandlerProps> = ({ onShapeChange, onStatusCh
     if (videoRef.current && videoRef.current.videoWidth > 0) {
       const isPinching = detectGestures(videoRef.current);
       
-      // Debounce or immediate? Immediate is more responsive, 
-      // but let's ensure we don't flicker.
-      // Since the request is "while pinching -> tree", we map direct state.
-      
       if (isPinching) {
-        onShapeChange(ShapeType.TREE);
+        onPinchChange(true);
         lastGestureTime.current = performance.now();
       } else {
         // Add a tiny delay before snapping back to ensure stability if tracking misses a frame
         if (performance.now() - lastGestureTime.current > 300) {
-           onShapeChange(ShapeType.GALAXY);
+           onPinchChange(false);
         }
       }
     }
