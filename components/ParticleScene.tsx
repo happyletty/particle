@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect, Suspense, Component } from 'react';
 import { useFrame, useThree, extend } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial, Image, useVideoTexture, Billboard } from '@react-three/drei';
+import { shaderMaterial, Image, useVideoTexture, Billboard, useTexture } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -74,6 +74,7 @@ const HaloMaterial = shaderMaterial(
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
       
+      // MODIFIED: Increased size to 6.0 (Doubled). Restored breathing amplitude to 0.15.
       float size = vScale * 6.0; 
       float breathe = 1.0 + 0.15 * sin(uTime * 3.0 + worldPosition.x * 10.0 + worldPosition.y * 5.0);
       size *= breathe;
@@ -106,15 +107,15 @@ const HaloMaterial = shaderMaterial(
 const MeteorMaterial = shaderMaterial(
   {
     uTime: 0,
-    uColor: new THREE.Color(1.0, 1.0, 1.0),
   },
   // Vertex
   `
+    attribute vec3 instanceColor;
+    varying vec3 vInstanceColor;
     varying vec2 vUv;
     void main() {
       vUv = uv;
-      // Use standard modelViewMatrix combined with instanceMatrix
-      // This works because Three.js handles the instanceMatrix attribute automatically for InstancedMesh
+      vInstanceColor = instanceColor;
       vec4 mvPosition = viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0);
       gl_Position = projectionMatrix * mvPosition;
     }
@@ -122,14 +123,15 @@ const MeteorMaterial = shaderMaterial(
   // Fragment
   `
     varying vec2 vUv;
-    uniform vec3 uColor;
+    varying vec3 vInstanceColor;
     void main() {
       float alpha = smoothstep(0.0, 1.0, vUv.x);
       float shape = 1.0 - abs(vUv.y - 0.5) * 2.0;
       alpha *= shape;
       
       if (alpha < 0.01) discard;
-      gl_FragColor = vec4(uColor, alpha);
+      // Use instance color for dimming effect
+      gl_FragColor = vec4(vInstanceColor, alpha);
     }
   `
 );
@@ -233,8 +235,11 @@ const PhysicalGlareMaterial = shaderMaterial(
       vec3 halfVector = normalize(viewDir + lightDir); 
 
       float NdotH = max(0.0, dot(worldNormal, halfVector));
-      float specular = pow(NdotH, 60.0); 
-      specular += pow(NdotH, 20.0) * 0.15;
+      
+      // MODIFIED: Reduced specular power (30 -> 15) to widen reflection angle. 
+      // This effectively doubles the number of visible glares.
+      float specular = pow(NdotH, 15.0); 
+      specular += pow(NdotH, 10.0) * 0.15;
 
       float breathe = sin(uTime * 3.0 + worldPosition.x * 0.5) * 0.3 + 0.7;
       vIntensity = specular * breathe * 4.0;
@@ -242,7 +247,7 @@ const PhysicalGlareMaterial = shaderMaterial(
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
 
-      // Reduced glare size by half as requested: (2.0 + ...) -> (1.0 + ...)
+      // Glare size
       float glareSize = particleScale * (1.0 + vIntensity * 0.75); 
       vec3 offset = (camRight * position.x + camUp * position.y) * glareSize;
       vec3 finalPos = surfacePos + offset;
@@ -294,18 +299,17 @@ const MEDIA_CONTENT: MediaItem[] = [
 
 const calculateMediaPositions = () => {
   const items = [...MEDIA_CONTENT];
-  const count = items.length;
-  const minY = -3;
-  const maxY = 3;
-  const yStep = (maxY - minY) / count;
+  // Widen vertical spread slightly
+  const minY = -4.0;
+  const maxY = 4.0;
 
   return items.map((item, index) => {
-    const y = minY + index * yStep + (Math.random() - 0.5); 
-    const hBase = TREE_HEIGHT / 2;
-    const relHeight = (y + hBase) / TREE_HEIGHT;
-    const r = (TREE_RADIUS * (1 - relHeight)) + 0.5; 
+    const y = minY + Math.random() * (maxY - minY);
+    const theta = Math.random() * Math.PI * 2;
+    // MODIFIED: Radius increased (4.5 to 7.5) to place items in the outer foliage layer,
+    // avoiding the dense core so they are clearly visible.
+    const r = 4.5 + Math.random() * 3.0; 
 
-    const theta = index * 2.4; 
     const x = r * Math.cos(theta);
     const z = r * Math.sin(theta);
     
@@ -313,17 +317,91 @@ const calculateMediaPositions = () => {
   });
 };
 
-const VideoPlane: React.FC<{ url: string; active: boolean; opacity?: number }> = ({ url, active, opacity = 1 }) => {
-  const texture = useVideoTexture(url, { muted: true, loop: true, start: true, playsInline: true });
+// --- Cube Components for Media ---
+
+const BaseCube: React.FC<{ 
+  texture: THREE.Texture, 
+  item: MediaItem, 
+  onClick: (e: any, item: MediaItem) => void,
+  visible: boolean 
+}> = ({ texture, item, onClick, visible }) => {
+  const groupRef = useRef<THREE.Group>(null);
+  const [hovered, setHover] = useState(false);
+  const scaleRef = useRef(0);
+
+  useFrame((state, delta) => {
+    if (groupRef.current) {
+      // Rotation animation
+      groupRef.current.rotation.y += delta * 0.5;
+      groupRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.5 + item.id) * 0.2;
+      
+      // Visibility scale logic
+      const targetScale = visible ? (hovered ? 1.2 : 1.0) : 0;
+      scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 5);
+      
+      groupRef.current.scale.setScalar(scaleRef.current);
+    }
+  });
+
+  return (
+    <group 
+      ref={groupRef} 
+      position={item.position} 
+      onClick={(e) => { e.stopPropagation(); onClick(e, item); }}
+      onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
+      onPointerOut={() => setHover(false)}
+    >
+      {/* Main Cube: Significantly increased size (2.2) to match "maximum random particle size" */}
+      <mesh>
+        <boxGeometry args={[2.2, 2.2, 2.2]} />
+        <meshBasicMaterial map={texture} toneMapped={false} />
+      </mesh>
+      
+      {/* Highlight Wireframe: Adds a white border to make it pop against the dark background */}
+      <mesh>
+         <boxGeometry args={[2.3, 2.3, 2.3]} />
+         <meshBasicMaterial color="#ffffff" wireframe opacity={0.4} transparent />
+      </mesh>
+    </group>
+  );
+};
+
+const ImageCube: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
+    const texture = useTexture(item.url);
+    return <BaseCube texture={texture} item={item} onClick={onClick} visible={visible} />;
+};
+
+const VideoCube: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
+    // Muted loop for the floating cube
+    const texture = useVideoTexture(item.url, { muted: true, loop: true, start: true, playsInline: true });
+    return <BaseCube texture={texture} item={item} onClick={onClick} visible={visible} />;
+};
+
+// --- Preview Components ---
+
+const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
+  // Unmuted for preview
+  const texture = useVideoTexture(url, { 
+    muted: false, 
+    loop: true, 
+    start: true, 
+    playsInline: true 
+  });
+  
   useEffect(() => {
-    if (active) texture.image.play().catch(() => {});
-    else texture.image.pause();
-  }, [active, texture]);
+    const video = texture.image;
+    if(video) {
+        // Ensure volume is on and not muted
+        video.muted = false;
+        video.volume = 1.0;
+        video.play().catch((e: any) => console.log("Video play error", e));
+    }
+  }, [texture]);
 
   return (
     <mesh>
-      <planeGeometry args={[1, 1]} />
-      <meshBasicMaterial map={texture} toneMapped={false} transparent opacity={opacity} />
+      <planeGeometry args={[1.6 * 2.5, 0.9 * 2.5]} />
+      <meshBasicMaterial map={texture} toneMapped={false} />
     </mesh>
   );
 };
@@ -332,19 +410,10 @@ const MediaGallery: React.FC<{ shape: ShapeType }> = ({ shape }) => {
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
   const itemsWithPos = useMemo(() => calculateMediaPositions(), []);
   
-  const groupRef = useRef<THREE.Group>(null);
-  const opacityRef = useRef(0);
-
-  useFrame((state, delta) => {
-    if (!groupRef.current) return;
-    const targetOpacity = shape === ShapeType.TREE ? 1 : 0;
-    opacityRef.current = THREE.MathUtils.lerp(opacityRef.current, targetOpacity, delta * 3);
-    groupRef.current.visible = opacityRef.current > 0.01;
-  });
+  const isTree = shape === ShapeType.TREE;
 
   const handleItemClick = (e: any, item: MediaItem) => {
-    e.stopPropagation();
-    if (shape !== ShapeType.TREE) return;
+    if (!isTree) return;
     setActiveItem(item);
   };
 
@@ -355,65 +424,38 @@ const MediaGallery: React.FC<{ shape: ShapeType }> = ({ shape }) => {
 
   return (
     <>
-      <group ref={groupRef}>
+      <group>
         {itemsWithPos.map((item) => (
-          <Billboard
-            key={item.id}
-            position={item.position}
-            follow={true}
-            lockX={false}
-            lockY={false}
-            lockZ={false}
-          >
-             <group scale={0.8}>
-                {item.type === 'image' ? (
-                  <Image url={item.url} transparent opacity={0.9} scale={[1.5, 1.5]} toneMapped={false} />
-                ) : (
-                  <mesh>
-                    <planeGeometry args={[1.5, 1.5]} />
-                    <meshBasicMaterial color="#ffcc00" opacity={0.8} transparent />
-                    <mesh position={[0,0,0.01]}>
-                        <circleGeometry args={[0.3, 3]} />
-                        <meshBasicMaterial color="black" />
-                    </mesh>
-                  </mesh>
-                )}
-                <mesh position={[0, 0, -0.01]}>
-                    <planeGeometry args={[1.7, 1.7]} />
-                    <meshBasicMaterial color="#fff" opacity={0.6} transparent />
-                </mesh>
-             </group>
-             <mesh visible={false} onClick={(e) => handleItemClick(e, item)}>
-                <planeGeometry args={[2.5, 2.5]} />
-                <meshBasicMaterial color="red" />
-             </mesh>
-          </Billboard>
+           <React.Fragment key={item.id}>
+             {item.type === 'video' ? (
+                <VideoCube item={item} onClick={handleItemClick} visible={isTree} />
+             ) : (
+                <ImageCube item={item} onClick={handleItemClick} visible={isTree} />
+             )}
+           </React.Fragment>
         ))}
       </group>
 
       {activeItem && (
         <group>
-            <mesh position={[0, 0, 20]} onClick={closeExpanded}>
+            {/* Fullscreen transparent plane to catch clicks for closing */}
+            <mesh position={[0, 0, 15]} onClick={closeExpanded}>
                 <planeGeometry args={[100, 100]} />
-                <meshBasicMaterial color="black" transparent opacity={0.8} />
+                <meshBasicMaterial color="black" transparent opacity={0.7} />
             </mesh>
             
-            <Billboard position={[0, 0, 25]} follow={true}>
-                 <group scale={8}>
-                    {activeItem.type === 'image' ? (
+            <Billboard position={[0, 0, 20]} follow={true}>
+                 {activeItem.type === 'image' ? (
+                     <group scale={3}>
                         <Image url={activeItem.url} scale={[1.6, 1]} toneMapped={false} />
-                    ) : (
-                        <group scale={[1.6, 1, 1]}>
-                             <Suspense fallback={<meshBasicMaterial color="gray" />}>
-                                <VideoPlane url={activeItem.url} active={true} />
-                             </Suspense>
-                        </group>
-                    )}
-                    <mesh position={[0, -0.7, 0]}>
-                       <planeGeometry args={[1, 0.1]} />
-                       <meshBasicMaterial color="black" transparent opacity={0} />
-                    </mesh>
-                 </group>
+                     </group>
+                 ) : (
+                    <group scale={3}>
+                       <Suspense fallback={<meshBasicMaterial color="gray" />}>
+                          <PreviewVideoPlane url={activeItem.url} />
+                       </Suspense>
+                    </group>
+                 )}
             </Billboard>
         </group>
       )}
@@ -495,7 +537,8 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape }) => {
       
       const angle = branchAngle + curveAngle + randomSpread;
 
-      let gx = Math.cos(angle) * radius;
+      // MODIFIED: Elliptical shape for galaxy (1.2 stretch on X axis)
+      let gx = Math.cos(angle) * radius * 1.2;
       let gz = Math.sin(angle) * radius;
       let gy = (Math.random() - 0.5) * (2 + (GALAXY_RADIUS - radius) * 0.2) * 1.5;
 
@@ -934,9 +977,16 @@ export const FloatingParticles: React.FC = () => {
 };
 
 export const ShootingStars: React.FC = () => {
-    const count = 3; // Pool size
+    // Increased pool size to 6 to handle up to 3 active + overlapping fade-outs
+    const count = 6; 
     const meshRef = useRef<THREE.InstancedMesh>(null);
     const tempObj = new THREE.Object3D();
+    
+    // Master controller for burst timing
+    const controller = useRef({
+        nextSpawnTime: 0,
+        burstRemaining: 0, // How many meteors left in current burst
+    });
     
     // Maintain state for each meteor
     const meteors = useRef(
@@ -947,15 +997,118 @@ export const ShootingStars: React.FC = () => {
             dir: new THREE.Vector3(),
             speed: 0,
             life: 0,
-            spawnTimer: Math.random() * 5 // Initial stagger
+            scale: 0,
+            fadeDuration: 0 // ADDED: Random fade duration
         }))
     );
+    
+    // Initialize controller.nextSpawnTime on mount
+    useEffect(() => {
+        controller.current.nextSpawnTime = 2.0; 
+        
+        // ADDED: Initialize all meteors to White so they aren't invisible (black) initially
+        if (meshRef.current) {
+            const white = new THREE.Color(1, 1, 1);
+            for (let i = 0; i < count; i++) {
+                meshRef.current.setColorAt(i, white);
+            }
+            if (meshRef.current.instanceColor) meshRef.current.instanceColor.needsUpdate = true;
+        }
+    }, []);
 
     useFrame((state, delta) => {
         if (!meshRef.current) return;
-
+        const camera = state.camera;
         const time = state.clock.getElapsedTime();
 
+        // --- Spawning Logic ---
+        if (time > controller.current.nextSpawnTime) {
+            
+            // If starting a new burst, determine the count
+            if (controller.current.burstRemaining === 0) {
+                 controller.current.burstRemaining = 1 + Math.floor(Math.random() * 3); // 1 to 3
+            }
+
+            // Find an inactive meteor in the pool
+            const availableMeteor = meteors.current.find(m => !m.active);
+            
+            if (availableMeteor) {
+                // MODIFIED: Random fade duration 0 - 1.5s
+                const fadeDuration = Math.random() * 1.5;
+                const life = 0.8 + Math.random() * 0.4 + fadeDuration; // Ensure life includes fade time
+                
+                availableMeteor.active = true;
+                availableMeteor.startTime = time;
+                availableMeteor.life = life;
+                availableMeteor.fadeDuration = fadeDuration;
+                availableMeteor.speed = 60 + Math.random() * 20; // Fast speed
+                availableMeteor.scale = 1.0;
+
+                // --- Calculate Camera-Relative Position ---
+                // Get Camera Basis Vectors
+                const matrix = camera.matrixWorld;
+                const right = new THREE.Vector3().setFromMatrixColumn(matrix, 0).normalize();
+                const up = new THREE.Vector3().setFromMatrixColumn(matrix, 1).normalize();
+                const backward = new THREE.Vector3().setFromMatrixColumn(matrix, 2).normalize(); // +Z is backward in Camera space
+                const forward = backward.clone().negate(); // View direction
+
+                // Define Background Plane Center: Subject (0,0,0) + Forward * Distance
+                // This puts the plane "behind" the subject from the camera's perspective.
+                // MODIFIED: Distance 60-120 (Closer to be visible)
+                const bgDist = 60 + Math.random() * 60; 
+                const spawnPlaneCenter = forward.clone().multiplyScalar(bgDist);
+                
+                // Randomize Start Position on this plane (Right/Up basis)
+                const isLeftToRight = Math.random() > 0.5;
+                // Increased offset to account for greater distance and perspective
+                const xOffset = 50 + (bgDist - 60) * 0.5; 
+                const startX = isLeftToRight ? -xOffset : xOffset;
+                const startY = 10 + Math.random() * 20; 
+                
+                const pos = new THREE.Vector3().copy(spawnPlaneCenter)
+                    .add(right.clone().multiplyScalar(startX))
+                    .add(up.clone().multiplyScalar(startY));
+
+                // --- Calculate Direction ---
+                // Angle 25-45 deg downwards relative to the "Right" vector
+                const angleDeg = 25 + Math.random() * 20;
+                const angleRad = THREE.MathUtils.degToRad(angleDeg);
+                
+                // Direction components in plane basis
+                const dx = Math.cos(angleRad) * (isLeftToRight ? 1 : -1);
+                const dy = -Math.sin(angleRad);
+                
+                const dir = new THREE.Vector3()
+                    .add(right.clone().multiplyScalar(dx))
+                    .add(up.clone().multiplyScalar(dy))
+                    .normalize();
+
+                availableMeteor.pos.copy(pos);
+                availableMeteor.dir.copy(dir);
+
+                // Set initial color (White)
+                meshRef.current.setColorAt(meteors.current.indexOf(availableMeteor), new THREE.Color(1,1,1));
+
+                // Decrement burst count
+                controller.current.burstRemaining--;
+
+                // Determine next spawn time
+                if (controller.current.burstRemaining > 0) {
+                    // Still in a burst, schedule next one quickly (< 500ms)
+                    controller.current.nextSpawnTime = time + 0.1 + Math.random() * 0.4;
+                } else {
+                    // Burst finished.
+                    // Interval: 2s - 5s AFTER this meteor ends
+                    const interval = 2.0 + Math.random() * 3.0; // 2 to 5
+                    controller.current.nextSpawnTime = time + life + interval;
+                }
+            } else {
+                // No pool available, retry very soon
+                 controller.current.nextSpawnTime = time + 0.1;
+            }
+        }
+
+        // --- Update & Render Logic ---
         meteors.current.forEach((m, i) => {
             if (m.active) {
                 const elapsed = time - m.startTime;
@@ -963,64 +1116,58 @@ export const ShootingStars: React.FC = () => {
                 // Move
                 m.pos.addScaledVector(m.dir, m.speed * delta);
                 
-                // Look at direction
-                tempObj.position.copy(m.pos);
-                // Rotate to align plane with direction
-                const lookAtPos = m.pos.clone().add(m.dir);
-                tempObj.lookAt(lookAtPos);
+                // Construct Rotation Matrix for Trail Billboard
+                const xDir = m.dir.clone();
+                const zDir = new THREE.Vector3().subVectors(camera.position, m.pos).normalize(); 
+                const yDir = new THREE.Vector3().crossVectors(zDir, xDir).normalize();
+                const finalZ = new THREE.Vector3().crossVectors(xDir, yDir).normalize();
                 
-                // Scale trail based on life or just static length
-                tempObj.scale.set(1, 1, 1);
+                const rotMatrix = new THREE.Matrix4().makeBasis(xDir, yDir, finalZ);
+                rotMatrix.setPosition(m.pos);
+
+                // ADDED: Dimming Logic
+                const timeRemaining = m.life - elapsed;
+                let brightness = 1.0;
                 
-                tempObj.updateMatrix();
+                // Start dimming in the last 'fadeDuration' seconds
+                if (timeRemaining < m.fadeDuration && m.fadeDuration > 0) {
+                     brightness = timeRemaining / m.fadeDuration;
+                }
+                brightness = THREE.MathUtils.clamp(brightness, 0, 1);
+                
+                // Update Color for Dimming
+                const c = new THREE.Color(brightness, brightness, brightness);
+                meshRef.current!.setColorAt(i, c);
+
+                const s = m.scale; 
+                const scaleMatrix = new THREE.Matrix4().makeScale(s, s, s);
+                
+                // Combine into final matrix
+                tempObj.matrix.multiplyMatrices(rotMatrix, scaleMatrix);
+                
                 meshRef.current!.setMatrixAt(i, tempObj.matrix);
 
-                // Die if too old
+                // Die
                 if (elapsed > m.life) {
                     m.active = false;
-                    // Respawn in 3-5 seconds
-                    m.spawnTimer = 3 + Math.random() * 2;
-                    // Reset matrix to zero/hide
-                    tempObj.scale.set(0,0,0);
-                    tempObj.updateMatrix();
+                    tempObj.matrix.identity().scale(new THREE.Vector3(0,0,0));
                     meshRef.current!.setMatrixAt(i, tempObj.matrix);
                 }
             } else {
-                m.spawnTimer -= delta;
-                if (m.spawnTimer <= 0) {
-                    // Spawn!
-                    m.active = true;
-                    m.startTime = time;
-                    m.life = 1.0; // Short burst
-                    m.speed = 40 + Math.random() * 20;
-                    
-                    // Pick a random spot in the upper hemisphere background
-                    const r = 60;
-                    const theta = Math.random() * Math.PI * 2;
-                    const phi = Math.acos(Math.random() * 0.5); // Top 60 degrees
-                    
-                    m.pos.set(
-                        r * Math.sin(phi) * Math.cos(theta),
-                        r * Math.cos(phi) + 10,
-                        r * Math.sin(phi) * Math.sin(theta) - 20 // Bias towards back
-                    );
-                    
-                    // Direction: Down and slightly sideways
-                    m.dir.set(
-                         (Math.random() - 0.5) * 1.0, 
-                         -1.0 - Math.random(), 
-                         (Math.random() - 0.5) * 0.5
-                    ).normalize();
-                }
+                // Ensure inactive ones are hidden
+                tempObj.matrix.identity().scale(new THREE.Vector3(0,0,0));
+                meshRef.current!.setMatrixAt(i, tempObj.matrix);
             }
         });
         
         meshRef.current.instanceMatrix.needsUpdate = true;
+        if (meshRef.current.instanceColor) meshRef.current.instanceColor.needsUpdate = true;
     });
 
     return (
         <instancedMesh ref={meshRef} args={[undefined, undefined, count]}>
-            <planeGeometry args={[12, 0.2]} />
+            {/* Length along X-axis (16), Width along Y-axis (0.4) */}
+            <planeGeometry args={[16, 0.4]} />
             {/* @ts-ignore */}
             <meteorMaterial transparent depthWrite={false} blending={THREE.AdditiveBlending} />
         </instancedMesh>
