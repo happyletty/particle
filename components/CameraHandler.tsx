@@ -31,27 +31,41 @@ const CameraHandler: React.FC<CameraHandlerProps> = ({ onPinchChange, onStatusCh
 
       onStatusChange("Requesting Camera...");
       try {
-        // Updated constraints for mobile compatibility
-        const stream = await navigator.mediaDevices.getUserMedia({
+        // Try preferred constraints first (User-facing/Front camera)
+        await requestCameraStream({
           video: {
-            facingMode: "user", // Prefer front camera on mobile
-            width: { ideal: 320 }, // Flexible width
-            height: { ideal: 240 }, // Flexible height
+            facingMode: "user",
+            width: { ideal: 320 },
+            height: { ideal: 240 },
             frameRate: { ideal: 30 }
           }
         });
+      } catch (err) {
+        console.warn("Preferred camera constraints failed, retrying with basic settings...", err);
+        try {
+          // Fallback: Simplest possible request
+          await requestCameraStream({ video: true });
+        } catch (finalErr) {
+          console.error("Camera access failed completely:", finalErr);
+          onError("Camera denied or unavailable. Use Mouse/Touch instead.");
+        }
+      }
+    };
 
+    const requestCameraStream = async (constraints: MediaStreamConstraints) => {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.addEventListener('loadeddata', () => {
-            onStatusChange("Ready");
-            predictWebcam();
+          // Wait for data to actually load before predicting
+          await new Promise<void>((resolve) => {
+            if (!videoRef.current) return;
+            videoRef.current.onloadeddata = () => {
+                resolve();
+            };
           });
+          onStatusChange("Ready");
+          predictWebcam();
         }
-      } catch (err) {
-        console.error(err);
-        onError("Camera denied or unavailable. Use Mouse/Touch instead.");
-      }
     };
 
     startCamera();

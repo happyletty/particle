@@ -26,9 +26,9 @@ const App: React.FC = () => {
     dragStart.current = { x: e.clientX, y: e.clientY };
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
-    const dx = e.clientX - dragStart.current.x;
-    const dy = e.clientY - dragStart.current.y;
+  const handlePointerMissed = (event: MouseEvent) => {
+    const dx = event.clientX - dragStart.current.x;
+    const dy = event.clientY - dragStart.current.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
     if (distance < 5) {
@@ -37,11 +37,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div 
-      className="app-container"
-      onPointerDown={handlePointerDown}
-      onPointerUp={handlePointerUp}
-    >
+    <div className="app-container">
       
       {/* 3D Scene Layer */}
       <div className="scene-layer">
@@ -50,6 +46,8 @@ const App: React.FC = () => {
           camera={{ position: [0, 16, 35], fov: 50 }} 
           gl={{ antialias: true, toneMappingExposure: 1.2 }} 
           dpr={[1, 2]} 
+          onPointerDown={handlePointerDown}
+          onPointerMissed={handlePointerMissed}
         >
           <color attach="background" args={['#000000']} />
           

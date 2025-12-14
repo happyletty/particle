@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect, Suspense, Component } from 'react';
 import { useFrame, useThree, extend } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial, Image, useVideoTexture, Billboard, useTexture } from '@react-three/drei';
+import { shaderMaterial, Image, useVideoTexture, Billboard, useTexture, Text } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -111,12 +111,18 @@ const MeteorMaterial = shaderMaterial(
   },
   // Vertex
   `
-    attribute vec3 instanceColor;
+    // Removed explicit instanceColor attribute to avoid redefinition error
     varying vec3 vInstanceColor;
     varying vec2 vUv;
     void main() {
       vUv = uv;
-      vInstanceColor = instanceColor;
+      
+      #ifdef USE_INSTANCING
+        vInstanceColor = instanceColor;
+      #else
+        vInstanceColor = vec3(1.0);
+      #endif
+      
       vec4 mvPosition = viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0);
       gl_Position = projectionMatrix * mvPosition;
     }
@@ -231,6 +237,8 @@ const PhysicalGlareMaterial = shaderMaterial(
       float particleScale = length(worldRotation[0]);
       vec3 surfacePos = worldPosition.xyz + (worldNormal * particleScale * 0.5);
 
+      vec3 surfacePos = worldPosition.xyz + (worldNormal * particleScale * 0.5);
+
       vec3 viewDir = normalize(uCamPos - surfacePos);
       vec3 lightDir = normalize(uLightPos - surfacePos);
       vec3 halfVector = normalize(viewDir + lightDir); 
@@ -288,38 +296,52 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
-// Updated with images that resemble the user's provided photos (Travel, Selfies, Snow, City)
+// Replaced with reliable Picsum seeds to ensure visibility (Unsplash often blocks hotlinking)
 const MEDIA_CONTENT: MediaItem[] = [
-  // Old street / Stairs
-  { id: 1, type: 'image', url: 'https://images.unsplash.com/photo-1516483638261-f4dbaf036963?w=600&q=80' },
-  // Couple / Portrait
-  { id: 2, type: 'image', url: 'https://images.unsplash.com/photo-1520466809213-7b9a56adcd45?w=600&q=80' },
-  // Man in cap / Portrait close up
-  { id: 3, type: 'image', url: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=600&q=80' },
-  // City / Tower (Shanghai vibes)
-  { id: 4, type: 'image', url: 'https://images.unsplash.com/photo-1474181487882-5abf3f0ba6c3?w=600&q=80' },
-  // Snow Mountains
-  { id: 5, type: 'image', url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=600&q=80' },
-  // Desert / Travel
-  { id: 6, type: 'image', url: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=600&q=80' },
-  // Group / Happy
-  { id: 7, type: 'image', url: 'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?w=600&q=80' },
-  // Video memory
-  { id: 8, type: 'video', url: 'https://cdn.pixabay.com/video/2019/12/12/29965-379255282_large.mp4' },
+  // Travel / Stairs vibe
+  { id: 1, type: 'image', url: 'https://picsum.photos/seed/travel/600/600' },
+  // Couple / People
+  { id: 2, type: 'image', url: 'https://picsum.photos/seed/love/600/600' },
+  // Portrait
+  { id: 3, type: 'image', url: 'https://picsum.photos/seed/person/600/600' },
+  // City / Architecture
+  { id: 4, type: 'image', url: 'https://picsum.photos/seed/city/600/600' },
+  // Snow / Nature
+  { id: 5, type: 'image', url: 'https://picsum.photos/seed/snow/600/600' },
+  // Desert / Nature
+  { id: 6, type: 'image', url: 'https://picsum.photos/seed/desert/600/600' },
+  // Happy / Crowd
+  { id: 7, type: 'image', url: 'https://picsum.photos/seed/friends/600/600' },
+  // Video placeholder (VideoTexture usually handles CORS better if from CDN)
+  { id: 8, type: 'video', url: 'https://cdn.pixabay.com/video/2021/04/13/70962-536647265_large.mp4' },
 ];
 
 const calculateMediaPositions = () => {
   const items = [...MEDIA_CONTENT];
-  // Widen vertical spread slightly
-  const minY = -4.0;
-  const maxY = 4.0;
+  const count = items.length;
+  
+  // Use Tree distribution logic to place them "inside"
+  // Tree Params: Height 14, Radius 8 at bottom, 0 at top. Center roughly at 0.
+  
+  const yStart = -(TREE_HEIGHT / 2) + 2; // Start slightly above bottom
+  const yEnd = (TREE_HEIGHT / 2) - 2;    // End slightly below top
+  const totalY = yEnd - yStart;
 
-  return items.map((item, index) => {
-    const y = minY + Math.random() * (maxY - minY);
-    const theta = Math.random() * Math.PI * 2;
-    // MODIFIED: Radius increased (4.5 to 7.5) to place items in the outer foliage layer,
-    // avoiding the dense core so they are clearly visible.
-    const r = 4.5 + Math.random() * 3.0; 
+  return items.map((item, i) => {
+    // 1. Vertical distribution
+    const t = i / (count - 1 || 1);
+    const y = yStart + t * totalY;
+    
+    // 2. Calculate Cone Radius at this Y
+    // Normalized height (0 at bottom, 1 at top)
+    const relHeight = (y + (TREE_HEIGHT / 2)) / TREE_HEIGHT;
+    const coneRadius = TREE_RADIUS * (1 - relHeight);
+    
+    // 3. Place "Inside" (50% of radius)
+    const r = coneRadius * 0.5; 
+    
+    // 4. Spiral distribution
+    const theta = i * 2.5; // Angle step in radians
 
     const x = r * Math.cos(theta);
     const z = r * Math.sin(theta);
@@ -328,29 +350,35 @@ const calculateMediaPositions = () => {
   });
 };
 
-// --- Cube Components for Media ---
+// --- Media Components ---
 
-const BaseCube: React.FC<{ 
+// A reliable display component that doesn't rely on complex geometry scaling for visibility state
+const HolographicPanel: React.FC<{ 
   texture: THREE.Texture, 
   item: MediaItem, 
   onClick: (e: any, item: MediaItem) => void,
-  visible: boolean 
-}> = ({ texture, item, onClick, visible }) => {
+  visible: boolean,
+  isVideo?: boolean
+}> = ({ texture, item, onClick, visible, isVideo }) => {
   const groupRef = useRef<THREE.Group>(null);
   const [hovered, setHover] = useState(false);
   const scaleRef = useRef(0);
+  
+  // Base scale for the panel - MODIFIED: Reduced to 0.5 (Half size)
+  const BASE_SIZE = 0.5;
 
   useFrame((state, delta) => {
     if (groupRef.current) {
-      // Rotation animation
-      groupRef.current.rotation.y += delta * 0.5;
-      groupRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.5 + item.id) * 0.2;
+      // 1. Look at camera (Billboard behavior)
+      groupRef.current.lookAt(state.camera.position);
       
-      // Visibility scale logic: 
-      // If visible is true (either Tree mode OR showMediaOnly mode), we scale up.
-      const targetScale = visible ? (hovered ? 1.2 : 1.0) : 0;
-      scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 5);
-      
+      // 2. Floating animation
+      const floatY = Math.sin(state.clock.elapsedTime + item.id) * 0.1; // Reduced float amplitude
+      groupRef.current.position.y = (item.position?.y || 0) + floatY;
+
+      // 3. Scale transition logic
+      const targetScale = visible ? (hovered ? 1.5 : 1.0) : 0;
+      scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
       groupRef.current.scale.setScalar(scaleRef.current);
     }
   });
@@ -358,41 +386,51 @@ const BaseCube: React.FC<{
   return (
     <group 
       ref={groupRef} 
-      position={item.position} 
+      position={item.position}
       onClick={(e) => { e.stopPropagation(); onClick(e, item); }}
       onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
       onPointerOut={() => setHover(false)}
     >
-      {/* Main Cube: Significantly increased size (2.2) to match "maximum random particle size" */}
-      <mesh>
-        <boxGeometry args={[2.2, 2.2, 2.2]} />
-        <meshBasicMaterial map={texture} toneMapped={false} />
+      {/* 1. Metal Frame / Backing - MODIFIED: Moved back to -0.05 to avoid Z-fighting */}
+      <mesh position={[0, 0, -0.05]}>
+         {/* Slightly larger than the image to create a border */}
+         <boxGeometry args={[BASE_SIZE * 1.1, BASE_SIZE * 1.1, 0.02]} />
+         <meshStandardMaterial 
+            color={hovered ? "#ffffff" : "#cccccc"} 
+            metalness={0.9}
+            roughness={0.2}
+            envMapIntensity={1.5}
+         />
       </mesh>
-      
-      {/* Highlight Wireframe: Adds a white border to make it pop against the dark background */}
-      <mesh>
-         <boxGeometry args={[2.3, 2.3, 2.3]} />
-         <meshBasicMaterial color="#ffffff" wireframe opacity={0.4} transparent />
+
+      {/* 2. The Main Image/Video Plane - MODIFIED: Moved forward to 0.01 */}
+      <mesh position={[0, 0, 0.01]}>
+        <planeGeometry args={[BASE_SIZE, BASE_SIZE]} />
+        <meshBasicMaterial 
+          map={texture} 
+          side={THREE.DoubleSide}
+          toneMapped={false}
+          transparent={true} // Allow round images if texture has transparency, though picsum usually doesn't
+        />
       </mesh>
     </group>
   );
 };
 
-const ImageCube: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
+const ImageLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
+    // Standard Texture loading
     const texture = useTexture(item.url);
-    return <BaseCube texture={texture} item={item} onClick={onClick} visible={visible} />;
+    return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} />;
 };
 
-const VideoCube: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
-    // Muted loop for the floating cube
+const VideoLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
     const texture = useVideoTexture(item.url, { muted: true, loop: true, start: true, playsInline: true });
-    return <BaseCube texture={texture} item={item} onClick={onClick} visible={visible} />;
+    return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} isVideo />;
 };
 
 // --- Preview Components ---
 
 const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
-  // Unmuted for preview
   const texture = useVideoTexture(url, { 
     muted: false, 
     loop: true, 
@@ -403,7 +441,6 @@ const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
   useEffect(() => {
     const video = texture.image;
     if(video) {
-        // Ensure volume is on and not muted
         video.muted = false;
         video.volume = 1.0;
         video.play().catch((e: any) => console.log("Video play error", e));
@@ -424,12 +461,9 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
   const itemsWithPos = useMemo(() => calculateMediaPositions(), []);
   
   const isTree = shape === ShapeType.TREE;
-  
-  // MODIFIED: Items are visible if in Tree mode OR if Media Only (Debug) mode is active
   const areItemsVisible = isTree || showMediaOnly;
 
   const handleItemClick = (e: any, item: MediaItem) => {
-    // Enable clicking in both tree mode and media-only mode
     if (!areItemsVisible) return;
     setActiveItem(item);
   };
@@ -444,11 +478,19 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
       <group>
         {itemsWithPos.map((item) => (
            <React.Fragment key={item.id}>
-             {item.type === 'video' ? (
-                <VideoCube item={item} onClick={handleItemClick} visible={areItemsVisible} />
-             ) : (
-                <ImageCube item={item} onClick={handleItemClick} visible={areItemsVisible} />
-             )}
+             <Suspense fallback={
+               // Fallback: A simple glowing box if texture loads slowly
+               <mesh position={item.position} scale={areItemsVisible ? 1 : 0}>
+                  <boxGeometry args={[0.5, 0.5, 0.5]} />
+                  <meshBasicMaterial color="#555" wireframe />
+               </mesh>
+             }>
+               {item.type === 'video' ? (
+                  <VideoLoader item={item} onClick={handleItemClick} visible={areItemsVisible} />
+               ) : (
+                  <ImageLoader item={item} onClick={handleItemClick} visible={areItemsVisible} />
+               )}
+             </Suspense>
            </React.Fragment>
         ))}
       </group>
@@ -458,13 +500,23 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
             {/* Fullscreen transparent plane to catch clicks for closing */}
             <mesh position={[0, 0, 15]} onClick={closeExpanded}>
                 <planeGeometry args={[100, 100]} />
-                <meshBasicMaterial color="black" transparent opacity={0.7} />
+                {/* MODIFIED: Adjusted opacity to 0.6 so particles are still visible in background */}
+                <meshBasicMaterial color="black" transparent opacity={0.6} />
             </mesh>
             
             <Billboard position={[0, 0, 20]} follow={true}>
                  {activeItem.type === 'image' ? (
                      <group scale={3}>
                         <Image url={activeItem.url} scale={[1.6, 1]} toneMapped={false} />
+                        <Text 
+                          position={[0, -0.6, 0.1]} 
+                          fontSize={0.1} 
+                          color="white"
+                          anchorX="center"
+                          anchorY="middle"
+                        >
+                          Click background to close
+                        </Text>
                      </group>
                  ) : (
                     <group scale={3}>
@@ -913,9 +965,7 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOn
 
       {/* --- ADDED MEDIA GALLERY WITH ERROR BOUNDARY & ISOLATED SUSPENSE --- */}
       <ErrorBoundary fallback={null}>
-         <Suspense fallback={null}>
             <MediaGallery shape={shape} showMediaOnly={showMediaOnly} />
-         </Suspense>
       </ErrorBoundary>
     </group>
   );
@@ -1050,16 +1100,19 @@ export const ShootingStars: React.FC<{ visible?: boolean }> = ({ visible = true 
             const availableMeteor = meteors.current.find(m => !m.active);
             
             if (availableMeteor) {
-                // MODIFIED: Random fade duration 0 - 1.5s
-                const fadeDuration = Math.random() * 1.5;
-                const life = 0.8 + Math.random() * 0.4 + fadeDuration; // Ensure life includes fade time
+                // MODIFIED: Shortened fade duration and total life by half
+                const fadeDuration = (Math.random() * 1.5) * 0.5;
+                const life = 0.4 + Math.random() * 0.2 + fadeDuration; // Ensure life includes fade time
                 
                 availableMeteor.active = true;
                 availableMeteor.startTime = time;
                 availableMeteor.life = life;
                 availableMeteor.fadeDuration = fadeDuration;
-                availableMeteor.speed = 60 + Math.random() * 20; // Fast speed
-                availableMeteor.scale = 1.0;
+                // CHANGED: Increased speed to 50-60
+                availableMeteor.speed = 50 + Math.random() * 10; 
+                
+                // MODIFIED: Increased scale to 2.5 to be visible at greater distance
+                availableMeteor.scale = 2.5; 
 
                 // --- Calculate Camera-Relative Position ---
                 // Get Camera Basis Vectors
@@ -1070,9 +1123,8 @@ export const ShootingStars: React.FC<{ visible?: boolean }> = ({ visible = true 
                 const forward = backward.clone().negate(); // View direction
 
                 // Define Background Plane Center: Subject (0,0,0) + Forward * Distance
-                // This puts the plane "behind" the subject from the camera's perspective.
-                // MODIFIED: Distance 60-120 (Closer to be visible)
-                const bgDist = 60 + Math.random() * 60; 
+                // MODIFIED: Distance 200-250 (Further back)
+                const bgDist = 200 + Math.random() * 50; 
                 const spawnPlaneCenter = forward.clone().multiplyScalar(bgDist);
                 
                 // Randomize Start Position on this plane (Right/Up basis)
@@ -1087,8 +1139,9 @@ export const ShootingStars: React.FC<{ visible?: boolean }> = ({ visible = true 
                     .add(up.clone().multiplyScalar(startY));
 
                 // --- Calculate Direction ---
-                // Angle 25-45 deg downwards relative to the "Right" vector
-                const angleDeg = 25 + Math.random() * 20;
+                // Angle 10-30 deg downwards relative to the "Right" vector
+                // CHANGED: Angle to 10-30 degrees
+                const angleDeg = 10 + Math.random() * 20;
                 const angleRad = THREE.MathUtils.degToRad(angleDeg);
                 
                 // Direction components in plane basis
