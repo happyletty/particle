@@ -1,0 +1,7 @@
+{
+  "name": "Galaxy Hand Control",
+  "description": "A 3D interactive particle system where hand gestures transform a galaxy into a Christmas tree using computer vision.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
