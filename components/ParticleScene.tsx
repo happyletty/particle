@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect, Suspense, Component } from 'react';
 import { useFrame, useThree, extend } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial, Image, useVideoTexture, Billboard, useTexture, Text } from '@react-three/drei';
+import { shaderMaterial, Image, useVideoTexture, Billboard, useTexture, Hud, PerspectiveCamera } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -296,24 +296,17 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
-// Replaced with reliable Picsum seeds to ensure visibility (Unsplash often blocks hotlinking)
+// CHANGED: Using local assets based on user request.
+// Assuming files 1.jpg to 8.jpg exist in /assets/ folder in public root.
 const MEDIA_CONTENT: MediaItem[] = [
-  // Travel / Stairs vibe
-  { id: 1, type: 'image', url: 'https://picsum.photos/seed/travel/600/600' },
-  // Couple / People
-  { id: 2, type: 'image', url: 'https://picsum.photos/seed/love/600/600' },
-  // Portrait
-  { id: 3, type: 'image', url: 'https://picsum.photos/seed/person/600/600' },
-  // City / Architecture
-  { id: 4, type: 'image', url: 'https://picsum.photos/seed/city/600/600' },
-  // Snow / Nature
-  { id: 5, type: 'image', url: 'https://picsum.photos/seed/snow/600/600' },
-  // Desert / Nature
-  { id: 6, type: 'image', url: 'https://picsum.photos/seed/desert/600/600' },
-  // Happy / Crowd
-  { id: 7, type: 'image', url: 'https://picsum.photos/seed/friends/600/600' },
-  // Video placeholder (VideoTexture usually handles CORS better if from CDN)
-  { id: 8, type: 'video', url: 'https://cdn.pixabay.com/video/2021/04/13/70962-536647265_large.mp4' },
+  { id: 1, type: 'image', url: '/assets/1.jpg' },
+  { id: 2, type: 'image', url: '/assets/2.jpg' },
+  { id: 3, type: 'image', url: '/assets/3.jpg' },
+  { id: 4, type: 'image', url: '/assets/4.jpg' },
+  { id: 5, type: 'image', url: '/assets/5.jpg' },
+  { id: 6, type: 'image', url: '/assets/6.jpg' },
+  { id: 7, type: 'image', url: '/assets/7.jpg' },
+  { id: 8, type: 'image', url: '/assets/8.jpg' },
 ];
 
 const calculateMediaPositions = () => {
@@ -449,28 +442,147 @@ const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
 
   return (
     <mesh>
-      <planeGeometry args={[1.6 * 2.5, 0.9 * 2.5]} />
+      <planeGeometry args={[4, 2.25]} />
       <meshBasicMaterial map={texture} toneMapped={false} />
     </mesh>
   );
 };
 
+// Component to handle the animated transition in HUD space
+const AnimatedPreview: React.FC<{
+    item: MediaItem;
+    startPos: THREE.Vector3;
+    isClosing: boolean;
+    onCloseComplete: () => void;
+}> = ({ item, startPos, isClosing, onCloseComplete }) => {
+    const groupRef = useRef<THREE.Group>(null);
+    const { gl } = useThree();
+    
+    // Animation state
+    const [targetZoom, setTargetZoom] = useState(1);
+    const progress = useRef(0); // 0 = at start pos (closed), 1 = at center (open)
+    
+    // Reset when opening new item
+    useEffect(() => {
+        if (!isClosing) {
+            progress.current = 0;
+            setTargetZoom(1);
+        }
+    }, [isClosing, item]);
+
+    // Wheel listener for zoom
+    useEffect(() => {
+        const handleWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const sensitivity = 0.0015;
+            setTargetZoom(prev => {
+                 const newVal = prev - (e.deltaY * sensitivity);
+                 return Math.max(0.2, Math.min(newVal, 5.0));
+            });
+        };
+        gl.domElement.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+        return () => {
+            gl.domElement.removeEventListener('wheel', handleWheel, { capture: true });
+        };
+    }, [gl.domElement]);
+
+    useFrame((state, delta) => {
+        if (!groupRef.current) return;
+
+        // Animate progress
+        const speed = delta * 3.0;
+        if (isClosing) {
+            progress.current -= speed;
+            if (progress.current <= 0) {
+                progress.current = 0;
+                onCloseComplete();
+            }
+        } else {
+            progress.current += speed;
+            if (progress.current >= 1) progress.current = 1;
+        }
+
+        // Apply Easing (Cubic Out)
+        const t = 1 - Math.pow(1 - progress.current, 3);
+
+        // Interpolate Position: StartPos -> Center (0,0,0)
+        groupRef.current.position.lerpVectors(startPos, new THREE.Vector3(0, 0, 0), t);
+
+        // Interpolate Scale: 0 -> targetZoom
+        // When closing, we also want to shrink back from current zoom to 0
+        const currentTargetScale = isClosing ? (targetZoom * t) : (targetZoom * t);
+        
+        // However, standard lerp logic above for scale might feel linear. 
+        // Let's just scale based on T.
+        const s = t * targetZoom;
+        groupRef.current.scale.setScalar(Math.max(0.001, s));
+    });
+
+    return (
+        <group ref={groupRef} position={startPos} scale={0}>
+             {item.type === 'image' ? (
+                 <group scale={3}>
+                    <Image url={item.url} scale={[1.6, 1]} toneMapped={false} />
+                 </group>
+             ) : (
+                <group scale={1}>
+                   <Suspense fallback={<meshBasicMaterial color="gray" />}>
+                      <PreviewVideoPlane url={item.url} />
+                   </Suspense>
+                </group>
+             )}
+        </group>
+    );
+};
+
 // MODIFIED: MediaGallery now accepts showMediaOnly prop
 const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ shape, showMediaOnly }) => {
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
+  const [startPos, setStartPos] = useState<THREE.Vector3>(new THREE.Vector3());
+  const [isClosing, setIsClosing] = useState(false);
+
   const itemsWithPos = useMemo(() => calculateMediaPositions(), []);
+  
+  // Need access to main camera to project world position to screen
+  const { camera, size } = useThree();
   
   const isTree = shape === ShapeType.TREE;
   const areItemsVisible = isTree || showMediaOnly;
 
   const handleItemClick = (e: any, item: MediaItem) => {
     if (!areItemsVisible) return;
+    
+    // 1. Get World Position
+    const worldPos = item.position!.clone();
+    
+    // 2. Project to NDC (-1 to +1)
+    worldPos.project(camera);
+    
+    // 3. Convert NDC to HUD Camera Space
+    // HUD Camera is Perspective at z=10, FOV 50.
+    // We need to calculate the visible width/height at Z=0 (where the preview plane sits relative to HUD cam)
+    const hudCamZ = 10;
+    const vFov = 50; 
+    const visibleHeight = 2 * Math.tan(THREE.MathUtils.degToRad(vFov) / 2) * hudCamZ;
+    const visibleWidth = visibleHeight * (size.width / size.height);
+    
+    const hudX = (worldPos.x * visibleWidth) / 2;
+    const hudY = (worldPos.y * visibleHeight) / 2;
+    
+    setStartPos(new THREE.Vector3(hudX, hudY, 0));
     setActiveItem(item);
+    setIsClosing(false);
   };
 
-  const closeExpanded = (e: any) => {
+  const triggerClose = (e: any) => {
     e.stopPropagation();
-    setActiveItem(null);
+    setIsClosing(true);
+  };
+
+  const handleCloseComplete = () => {
+      setActiveItem(null);
+      setIsClosing(false);
   };
 
   return (
@@ -479,16 +591,15 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
         {itemsWithPos.map((item) => (
            <React.Fragment key={item.id}>
              <Suspense fallback={
-               // Fallback: A simple glowing box if texture loads slowly
                <mesh position={item.position} scale={areItemsVisible ? 1 : 0}>
                   <boxGeometry args={[0.5, 0.5, 0.5]} />
                   <meshBasicMaterial color="#555" wireframe />
                </mesh>
              }>
                {item.type === 'video' ? (
-                  <VideoLoader item={item} onClick={handleItemClick} visible={areItemsVisible} />
+                  <VideoLoader item={item} onClick={handleItemClick} visible={areItemsVisible && activeItem?.id !== item.id} />
                ) : (
-                  <ImageLoader item={item} onClick={handleItemClick} visible={areItemsVisible} />
+                  <ImageLoader item={item} onClick={handleItemClick} visible={areItemsVisible && activeItem?.id !== item.id} />
                )}
              </Suspense>
            </React.Fragment>
@@ -496,37 +607,23 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
       </group>
 
       {activeItem && (
-        <group>
-            {/* Fullscreen transparent plane to catch clicks for closing */}
-            <mesh position={[0, 0, 15]} onClick={closeExpanded}>
-                <planeGeometry args={[100, 100]} />
-                {/* MODIFIED: Adjusted opacity to 0.6 so particles are still visible in background */}
-                <meshBasicMaterial color="black" transparent opacity={0.6} />
-            </mesh>
-            
-            <Billboard position={[0, 0, 20]} follow={true}>
-                 {activeItem.type === 'image' ? (
-                     <group scale={3}>
-                        <Image url={activeItem.url} scale={[1.6, 1]} toneMapped={false} />
-                        <Text 
-                          position={[0, -0.6, 0.1]} 
-                          fontSize={0.1} 
-                          color="white"
-                          anchorX="center"
-                          anchorY="middle"
-                        >
-                          Click background to close
-                        </Text>
-                     </group>
-                 ) : (
-                    <group scale={3}>
-                       <Suspense fallback={<meshBasicMaterial color="gray" />}>
-                          <PreviewVideoPlane url={activeItem.url} />
-                       </Suspense>
-                    </group>
-                 )}
-            </Billboard>
-        </group>
+        <Hud renderPriority={1}>
+           {/* Fixed camera for the HUD */}
+           <PerspectiveCamera makeDefault position={[0, 0, 10]} fov={50} />
+           
+           {/* Invisible Backdrop - Catches clicks to trigger closing animation */}
+           <mesh onClick={triggerClose} position={[0, 0, -2]}>
+              <planeGeometry args={[100, 100]} />
+              <meshBasicMaterial color="black" transparent opacity={0.0} depthTest={false} />
+           </mesh>
+           
+           <AnimatedPreview 
+              item={activeItem} 
+              startPos={startPos} 
+              isClosing={isClosing} 
+              onCloseComplete={handleCloseComplete} 
+           />
+        </Hud>
       )}
     </>
   );
