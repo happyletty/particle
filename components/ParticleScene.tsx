@@ -296,17 +296,18 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
-// CHANGED: Using local assets based on user request.
-// Assuming files 1.jpg to 8.jpg exist in /assets/ folder in public root.
+// CHANGED: Removed leading slash to use relative paths.
+// This supports GitHub Pages where the app is often in a subdirectory.
+// e.g. user.github.io/repo-name/assets/1.jpg
 const MEDIA_CONTENT: MediaItem[] = [
-  { id: 1, type: 'image', url: '/assets/1.jpg' },
-  { id: 2, type: 'image', url: '/assets/2.jpg' },
-  { id: 3, type: 'image', url: '/assets/3.jpg' },
-  { id: 4, type: 'image', url: '/assets/4.jpg' },
-  { id: 5, type: 'image', url: '/assets/5.jpg' },
-  { id: 6, type: 'image', url: '/assets/6.jpg' },
-  { id: 7, type: 'image', url: '/assets/7.jpg' },
-  { id: 8, type: 'image', url: '/assets/8.jpg' },
+  { id: 1, type: 'image', url: 'assets/1.jpg' },
+  { id: 2, type: 'image', url: 'assets/2.jpg' },
+  { id: 3, type: 'image', url: 'assets/3.jpg' },
+  { id: 4, type: 'image', url: 'assets/4.jpg' },
+  { id: 5, type: 'image', url: 'assets/5.jpg' },
+  { id: 6, type: 'image', url: 'assets/6.jpg' },
+  { id: 7, type: 'image', url: 'assets/7.jpg' },
+  { id: 8, type: 'image', url: 'assets/8.jpg' },
 ];
 
 const calculateMediaPositions = () => {
