@@ -1,10 +1,84 @@
-import React, { useState, Suspense, useRef } from 'react';
+import React, { useState, Suspense, useRef, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars, Environment } from '@react-three/drei';
 import { ParticleScene, FloatingParticles, ShootingStars } from './components/ParticleScene';
 import CameraHandler from './components/CameraHandler';
 import { ShapeType } from './types';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Volume2, VolumeX } from 'lucide-react';
+
+// --- Background Music Component ---
+const BackgroundMusic = () => {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  useEffect(() => {
+    // Attempt to play on mount
+    const audio = audioRef.current;
+    if (audio) {
+      audio.volume = 0.4; // Set a reasonable volume
+      const playPromise = audio.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setIsPlaying(true);
+          })
+          .catch((error) => {
+            console.log("Autoplay prevented by browser policy. User interaction required.", error);
+            setIsPlaying(false);
+          });
+      }
+    }
+  }, []);
+
+  const togglePlay = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent triggering other click handlers
+    const audio = audioRef.current;
+    if (audio) {
+      if (isPlaying) {
+        audio.pause();
+        setIsPlaying(false);
+      } else {
+        audio.play();
+        setIsPlaying(true);
+      }
+    }
+  };
+
+  return (
+    <>
+      <audio
+        ref={audioRef}
+        // Use raw.githubusercontent.com to serve the file directly
+        src="https://raw.githubusercontent.com/happyletty/particle/1a71d6b7a59f02564a99d880569b7da1c1e90ad9/assets/music/jingle-bells-182492.mp3"
+        loop
+      />
+      <button
+        style={{
+            position: 'absolute',
+            top: '1rem',
+            right: '4.5rem', // Positioned to the left of the debug button
+            zIndex: 60,
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
+            background: 'rgba(255, 255, 255, 0.15)',
+            color: 'white',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            backdropFilter: 'blur(4px)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+        }}
+        onClick={togglePlay}
+        title="Toggle Music"
+      >
+        {isPlaying ? <Volume2 size={20} /> : <VolumeX size={20} />}
+      </button>
+    </>
+  );
+};
 
 const App: React.FC = () => {
   const [isCameraPinching, setIsCameraPinching] = useState(false);
@@ -99,6 +173,9 @@ const App: React.FC = () => {
            </div>
         )}
       </div>
+
+      {/* Background Music Control */}
+      <BackgroundMusic />
 
       {/* ADDED: Top Right Debug Button */}
       <button 
