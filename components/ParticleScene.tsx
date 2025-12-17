@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { useMemo, useRef, useState, useEffect, Suspense, ReactNode, Component } from 'react';
 import { useFrame, useThree, extend, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial, useVideoTexture, Hud, PerspectiveCamera, Text } from '@react-three/drei';
+import { shaderMaterial, useVideoTexture, Hud, PerspectiveCamera, Text, Sparkles } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -29,8 +29,6 @@ function useBlobUrl(url: string) {
 
   const fetchWithFallback = async (originalUrl: string) => {
       const tryUrl = async (u: string) => {
-          // Standard fetch. For wsrv.nl (images), CORS is handled by the proxy.
-          // For videos, we try direct fetch.
           const res = await fetch(u);
           if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
           return await res.blob();
@@ -71,7 +69,7 @@ interface ErrorBoundaryState {
   hasError: boolean;
 }
 
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
@@ -92,7 +90,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
 // --- Shaders ---
 
-// 1. Halo Material (Slower breathe)
+// 1. Halo Material
 const HaloMaterial = shaderMaterial(
   { uTime: 0, uColor: new THREE.Color(1.0, 0.6, 0.1) },
   `
@@ -107,7 +105,6 @@ const HaloMaterial = shaderMaterial(
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
       float size = vScale * 6.0; 
-      // Slower breathe: uTime * 1.0 instead of 3.0
       float breathe = 1.0 + 0.15 * sin(uTime * 1.0 + worldPosition.x * 10.0 + worldPosition.y * 5.0);
       size *= breathe;
       vec3 pos = worldPosition.xyz + (camRight * position.x + camUp * position.y) * size;
@@ -129,6 +126,7 @@ const HaloMaterial = shaderMaterial(
   `
 );
 
+// 2. Meteor Material
 const MeteorMaterial = shaderMaterial(
   { uTime: 0 },
   `
@@ -158,7 +156,7 @@ const MeteorMaterial = shaderMaterial(
   `
 );
 
-// 2. Physical Glare Material (Much Slower, Very Subtle)
+// 3. Physical Glare Material
 const PhysicalGlareMaterial = shaderMaterial(
   { uTime: 0, uTex: new THREE.Texture(), uLightPos: new THREE.Vector3(0, 0, 0), uCamPos: new THREE.Vector3(0, 0, 0) },
   `
@@ -181,13 +179,8 @@ const PhysicalGlareMaterial = shaderMaterial(
       float NdotH = max(0.0, dot(worldNormal, halfVector));
       float specular = pow(NdotH, 15.0); 
       specular += pow(NdotH, 10.0) * 0.15;
-      
-      // Much Slower breathe: uTime * 0.5 (was 3.0 originally)
-      // Range: 0.8 to 0.9 (Very subtle pulse)
       float breathe = sin(uTime * 0.5 + worldPosition.x * 0.5) * 0.05 + 0.85;
-      
-      vIntensity = specular * breathe * 1.0; // Reduced multiplier to 1.0 (was 4.0)
-      
+      vIntensity = specular * breathe * 1.0; 
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
       float glareSize = particleScale * (1.0 + vIntensity * 0.5); 
@@ -207,13 +200,91 @@ const PhysicalGlareMaterial = shaderMaterial(
       vec3 hotWhite = vec3(1.0, 1.0, 1.0);
       vec3 golden   = vec3(1.0, 0.8, 0.1); 
       vec3 finalColor = mix(golden, hotWhite, texColor.a * vIntensity * 0.5);
-      // Soft cap on alpha/intensity to prevent harsh flashing
       gl_FragColor = vec4(finalColor, texColor.a * min(vIntensity, 1.0)); 
     }
   `
 );
 
-extend({ PhysicalGlareMaterial, HaloMaterial, MeteorMaterial });
+// 5. Thumbnail Material (For 1:1 Crop + Sparkle)
+const ThumbnailMaterial = shaderMaterial(
+  { uMap: new THREE.Texture(), uTime: 0, uImageAspect: 1.0, uRandomOffset: 0.0 },
+  `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  `
+    uniform sampler2D uMap;
+    uniform float uTime;
+    uniform float uImageAspect;
+    uniform float uRandomOffset;
+    varying vec2 vUv;
+
+    // Simple star shape SDF
+    float sdStar5(in vec2 p, in float r, in float rf) {
+        const vec2 k1 = vec2(0.809016994375, -0.587785252292);
+        const vec2 k2 = vec2(-k1.x,k1.y);
+        p.x = abs(p.x);
+        p -= 2.0*max(dot(k1,p),0.0)*k1;
+        p -= 2.0*max(dot(k2,p),0.0)*k2;
+        p.x = abs(p.x);
+        p.y -= r;
+        vec2 ba = rf*vec2(-k1.y,k1.x) - vec2(0,1);
+        float h = clamp( dot(p,ba)/dot(ba,ba), 0.0, r );
+        return length(p-ba*h) * sign(p.y*ba.x-p.x*ba.y);
+    }
+
+    void main() {
+      // 1. CROP LOGIC (Cover 1:1)
+      vec2 uv = vUv;
+      if (uImageAspect > 1.0) {
+        // Wide image: crop width
+        float range = 1.0 / uImageAspect;
+        float offset = (1.0 - range) / 2.0;
+        uv.x = offset + uv.x * range;
+      } else {
+        // Tall image: crop height
+        float range = uImageAspect;
+        float offset = (1.0 - range) / 2.0;
+        uv.y = offset + uv.y * range;
+      }
+
+      vec4 texColor = texture2D(uMap, uv);
+
+      // 2. SPARKLE LOGIC
+      // Randomize position based on offset slightly
+      vec2 starPos = vec2(0.8, 0.8) - vec2(sin(uRandomOffset)*0.1, cos(uRandomOffset)*0.1);
+      
+      // Calculate distance to current pixel
+      // Adjust p for aspect ratio of the plane (which is 1:1) so no adjustment needed
+      vec2 p = (vUv - starPos) * 2.0; 
+      
+      // Star size pulse
+      float blink = 0.5 + 0.5 * sin(uTime * 4.0 + uRandomOffset * 10.0);
+      float starSize = 0.15 * blink * step(0.9, blink); // Only show when bright
+      
+      // Using a simple cross flare instead of complex SDF for performance/look
+      float dist = length(p);
+      float glow = 0.05 / dist;
+      
+      // Sharper rays
+      float rays = max(0.0, 1.0 - abs(p.x * p.y * 1000.0));
+      
+      float starAlpha = (glow + rays) * blink;
+      starAlpha = smoothstep(0.1, 1.0, starAlpha);
+      
+      // Mix star on top
+      vec3 starColor = vec3(1.0, 1.0, 0.8);
+      vec3 finalColor = mix(texColor.rgb, starColor, clamp(starAlpha, 0.0, 1.0));
+      
+      gl_FragColor = vec4(finalColor, texColor.a);
+    }
+  `
+);
+
+extend({ PhysicalGlareMaterial, HaloMaterial, MeteorMaterial, ThumbnailMaterial });
 
 const useDiffractionTexture = () => {
   return useMemo(() => {
@@ -249,14 +320,10 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
-// Helper: Wrap GitHub Release image URLs in a CORS proxy (wsrv.nl)
-// HIGH QUALITY: Increased width to 1024 and quality to 95 for better visuals
 const getProxiedImageUrl = (filename: string) => {
-    // wsrv.nl expects "github.com/..." without https://
     return `https://wsrv.nl/?url=github.com/happyletty/particle/releases/download/1.0/${filename}&w=1024&q=95&output=webp`;
 };
 
-// Video URLs (Proxying video is harder, using direct link with CORS hope, fallback handled by ErrorBoundary)
 const getVideoUrl = (filename: string) => {
     return `https://github.com/happyletty/particle/releases/download/1.0/${filename}`;
 };
@@ -265,7 +332,7 @@ const RAW_MEDIA_CONTENT: MediaItem[] = [
   ...Array.from({ length: 25 }, (_, i) => ({
     id: i + 1,
     type: 'image' as const,
-    url: getProxiedImageUrl(`${i + 1}.jpg`) // Use Proxy with HQ
+    url: getProxiedImageUrl(`${i + 1}.jpg`)
   })),
   { id: 101, type: 'video' as const, url: getVideoUrl('1.mp4') },
   { id: 102, type: 'video' as const, url: getVideoUrl('2.mp4') },
@@ -274,26 +341,38 @@ const RAW_MEDIA_CONTENT: MediaItem[] = [
 
 const calculateMediaPositions = (items: MediaItem[]) => {
   const count = items.length;
-  // Shift positions down to avoid the top "star" area
-  const yStart = -(TREE_HEIGHT / 2) + 0.5; // Approx -6.5
-  const yEnd = (TREE_HEIGHT / 2) - 4.5;    // Approx +2.5
+  // Adjust range to avoid top tip and very bottom
+  const yStart = -(TREE_HEIGHT / 2) + 1.5; 
+  const yEnd = (TREE_HEIGHT / 2) - 3.5; 
   const totalY = yEnd - yStart;
+  
+  // Use Golden Angle (approx 2.3999 radians) for optimal distribution (Phyllotaxis)
+  const phi = Math.PI * (3 - Math.sqrt(5)); 
 
   return items.map((item, i) => {
+    // Distribute y uniformly
     const t = i / (count - 1 || 1);
     const y = yStart + t * totalY;
+    
+    // Calculate max radius at this height (Cone shape)
     const relHeight = (y + (TREE_HEIGHT / 2)) / TREE_HEIGHT;
-    const coneRadius = TREE_RADIUS * (1 - relHeight);
-    const r = coneRadius * 0.5; 
-    const theta = i * 2.5; 
-    const x = r * Math.cos(theta);
-    const z = r * Math.sin(theta);
+    const coneMaxRadius = TREE_RADIUS * (1 - relHeight);
+    
+    // VOLUME DISTRIBUTION:
+    // r = R * sqrt(random) ensures uniform distribution on a disk area.
+    // We add a small core offset (0.2) so items don't get stuck inside the central trunk
+    const randomR = coneMaxRadius * (0.2 + 0.8 * Math.sqrt(Math.random()));
+
+    // Calculate angle using golden angle spiral
+    const theta = i * phi; 
+    
+    const x = randomR * Math.cos(theta);
+    const z = randomR * Math.sin(theta);
+    
     return { ...item, position: new THREE.Vector3(x, y, z) };
   });
 };
 
-// --- Fallback Components ---
-// MODIFIED: Return null to hide placeholder if resource fails
 const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = () => {
   return null;
 };
@@ -328,16 +407,17 @@ const HolographicPanel: React.FC<{
   aspectRatio: number 
 }> = ({ texture, item, onClick, visible, isVideo, aspectRatio }) => {
   const groupRef = useRef<THREE.Group>(null);
+  const materialRef = useRef<any>(null);
   const [hovered, setHover] = useState(false);
   const scaleRef = useRef(0);
   const BASE_SIZE = 0.5;
 
-  // Calculate dimensions based on aspect ratio
   const renderHeight = BASE_SIZE;
-  const renderWidth = BASE_SIZE * aspectRatio;
+  const renderWidth = BASE_SIZE; 
 
   useFrame((state, delta) => {
     if (groupRef.current) {
+      // NOTE: This ensures the panel always faces the camera, even while rotating with the tree
       groupRef.current.lookAt(state.camera.position);
       const floatY = Math.sin(state.clock.elapsedTime + item.id) * 0.1; 
       groupRef.current.position.y = (item.position?.y || 0) + floatY;
@@ -345,6 +425,9 @@ const HolographicPanel: React.FC<{
       const targetScale = visible ? (hovered ? 1.5 : 1.0) : 0;
       scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
       groupRef.current.scale.setScalar(scaleRef.current);
+    }
+    if (materialRef.current) {
+        materialRef.current.uniforms.uTime.value = state.clock.getElapsedTime();
     }
   });
 
@@ -360,13 +443,16 @@ const HolographicPanel: React.FC<{
          <boxGeometry args={[renderWidth * 1.1, renderHeight * 1.1, 0.02]} />
          <meshStandardMaterial color={hovered ? "#ffffff" : "#cccccc"} metalness={0.9} roughness={0.2} envMapIntensity={1.5} />
       </mesh>
-      <mesh position={[0, 0, 0.005]}>
-          <planeGeometry args={[renderWidth, renderHeight]} />
-          <meshBasicMaterial color="#222" />
-      </mesh>
       <mesh position={[0, 0, 0.01]}>
         <planeGeometry args={[renderWidth, renderHeight]} />
-        <meshBasicMaterial map={texture} side={THREE.DoubleSide} toneMapped={false} transparent={true} color="white" />
+        {/* @ts-ignore */}
+        <thumbnailMaterial 
+            ref={materialRef} 
+            uMap={texture} 
+            uImageAspect={aspectRatio} 
+            uRandomOffset={item.id} 
+            transparent 
+        />
       </mesh>
     </group>
   );
@@ -377,15 +463,13 @@ const ImageLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }>
     const texture = useLoader(THREE.TextureLoader, blobUrl);
     const { gl } = useThree();
 
-    // High Quality Texture Settings
     useEffect(() => {
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.anisotropy = gl.capabilities.getMaxAnisotropy();
-        texture.minFilter = THREE.LinearFilter; // Often sharper for non-POT textures than mipmaps
+        texture.minFilter = THREE.LinearFilter;
         texture.needsUpdate = true;
     }, [texture, gl]);
     
-    // Calculate aspect ratio from loaded texture
     const aspect = (texture.image && texture.image.width && texture.image.height) 
         ? texture.image.width / texture.image.height 
         : 1;
@@ -400,7 +484,6 @@ const VideoLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }>
     });
 
     const video = texture.image;
-    // Default to 16:9 if metadata isn't ready yet, or calculate
     const aspect = (video && video.videoWidth && video.videoHeight)
         ? video.videoWidth / video.videoHeight
         : 1.77; 
@@ -414,7 +497,6 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
   const texture = useLoader(THREE.TextureLoader, blobUrl);
   const { gl } = useThree();
 
-  // High Quality Settings
   useEffect(() => {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = gl.capabilities.getMaxAnisotropy();
@@ -422,25 +504,26 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
     texture.needsUpdate = true;
   }, [texture, gl]);
 
-  // Calculate dynamic dimensions for preview
   const image = texture.image;
   const aspect = (image && image.width && image.height) ? image.width / image.height : 1.6;
-  
-  // Base height for the preview in the HUD
   const height = 4.5; 
   const width = height * aspect;
 
   return (
     <group>
-      {/* Background Frame */}
-      <mesh position={[0, 0, -0.05]}>
-        <planeGeometry args={[width + 0.2, height + 0.2]} />
-        <meshBasicMaterial color="black" transparent opacity={0.8} />
-      </mesh>
-      {/* Image Mesh */}
       <mesh>
         <planeGeometry args={[width, height]} />
         <meshBasicMaterial map={texture} toneMapped={false} transparent />
+      </mesh>
+      {/* Background Frame - METALLIC GOLD BORDER (Behind the image) */}
+      <mesh position={[0, 0, -0.02]}>
+        <boxGeometry args={[width + 0.3, height + 0.3, 0.05]} />
+        <meshStandardMaterial 
+          color="#FFD700" 
+          metalness={1.0} 
+          roughness={0.15} 
+          envMapIntensity={2.5} 
+        />
       </mesh>
     </group>
   );
@@ -465,19 +548,29 @@ const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
 
   return (
     <group>
-      {/* Background Frame */}
-      <mesh position={[0, 0, -0.05]}>
-         <planeGeometry args={[width + 0.2, height + 0.2]} />
-         <meshBasicMaterial color="black" transparent opacity={0.8} />
-      </mesh>
-      {/* Video Mesh */}
       <mesh>
         <planeGeometry args={[width, height]} />
         <meshBasicMaterial map={texture} toneMapped={false} />
       </mesh>
+      {/* Background Frame - METALLIC GOLD BORDER (Behind the video) */}
+      <mesh position={[0, 0, -0.02]}>
+         <boxGeometry args={[width + 0.3, height + 0.3, 0.05]} />
+         <meshStandardMaterial 
+            color="#FFD700" 
+            metalness={1.0} 
+            roughness={0.15} 
+            envMapIntensity={2.5} 
+         />
+      </mesh>
     </group>
   );
 };
+
+function easeOutBack(x: number): number {
+    const c1 = 0.6; 
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+}
 
 const AnimatedPreview: React.FC<{
     item: MediaItem;
@@ -506,7 +599,8 @@ const AnimatedPreview: React.FC<{
 
     useFrame((state, delta) => {
         if (!groupRef.current) return;
-        const speed = delta * 3.0;
+        const speed = delta * 1.2;
+
         if (isClosing) {
             progress.current -= speed;
             if (progress.current <= 0) { progress.current = 0; onCloseComplete(); }
@@ -514,15 +608,18 @@ const AnimatedPreview: React.FC<{
             progress.current += speed;
             if (progress.current >= 1) progress.current = 1;
         }
-        const t = 1 - Math.pow(1 - progress.current, 3);
-        groupRef.current.position.lerpVectors(startPos, new THREE.Vector3(0, 0, 0), t);
-        const s = t * targetZoom;
+
+        const t = progress.current;
+        const easedScale = isClosing ? t : easeOutBack(t); 
+        const posT = 1 - Math.pow(1 - t, 3);
+        groupRef.current.position.lerpVectors(startPos, new THREE.Vector3(0, 0, 0), posT);
+        
+        const s = easedScale * targetZoom;
         groupRef.current.scale.setScalar(Math.max(0.001, s));
     });
 
     return (
         <group ref={groupRef} position={startPos} scale={0}>
-             {/* Note: Background is now handled inside the Preview components to match aspect ratio */}
              {item.type === 'image' ? (
                  <Suspense fallback={null}>
                     <PreviewImage url={item.url} />
@@ -532,6 +629,97 @@ const AnimatedPreview: React.FC<{
                    <PreviewVideoPlane url={item.url} />
                 </Suspense>
              )}
+        </group>
+    );
+};
+
+// --- Animated Text Component ---
+const AnimatedLetter: React.FC<{ char: string, index: number, total: number, visible: boolean, fontUrl: string }> = ({ char, index, total, visible, fontUrl }) => {
+    const matRef = useRef<THREE.MeshStandardMaterial>(null);
+    const [pos] = useState<[number, number, number]>(() => [(index - total / 2) * 1.5, 0, 0]);
+    
+    useFrame((state) => {
+        if (!matRef.current) return;
+        const time = state.clock.getElapsedTime();
+        let targetOp = 0;
+        
+        if (visible) {
+             // Random flicker logic
+             // Base visibility
+             const base = 0.8; 
+             // Random noise per letter
+             const noise = Math.sin(time * 8 + index * 123.45);
+             // Occasional dip in brightness (flicker)
+             const flicker = noise > 0.5 ? 1.0 : (noise < -0.8 ? 0.3 : 0.85);
+             targetOp = base * flicker;
+        }
+        
+        // Smooth transition
+        matRef.current.opacity = THREE.MathUtils.lerp(matRef.current.opacity, targetOp, 0.05);
+    });
+
+    return (
+        <Text
+            font={fontUrl}
+            fontSize={3}
+            position={pos}
+            anchorX="center"
+            anchorY="middle"
+        >
+            {char}
+            <meshStandardMaterial
+                ref={matRef}
+                color="#FFD700"
+                metalness={1.0}
+                roughness={0.15}
+                emissive="#ffaa00"
+                emissiveIntensity={0.3}
+                transparent
+                depthWrite={false}
+                opacity={0}
+            />
+        </Text>
+    );
+};
+
+const MerryChristmasText: React.FC<{ visible: boolean }> = ({ visible }) => {
+    const groupRef = useRef<THREE.Group>(null);
+    const fontUrl = 'https://fonts.gstatic.com/s/greatvibes/v14/RWmMoKWR9v4ksMflq1LHgjczP5v5.woff';
+    const text = "Merry Christmas";
+    const letters = text.split('');
+
+    useFrame((state) => {
+        if (!groupRef.current) return;
+        // Slow floating motion
+        const time = state.clock.getElapsedTime();
+        groupRef.current.position.y = 4 + Math.sin(time * 0.5) * 0.5;
+    });
+
+    return (
+        <group ref={groupRef} position={[0, 4, 10]}>
+            <Suspense fallback={null}>
+                {letters.map((char, i) => (
+                    <AnimatedLetter 
+                        key={i} 
+                        char={char} 
+                        index={i} 
+                        total={letters.length} 
+                        visible={visible} 
+                        fontUrl={fontUrl} 
+                    />
+                ))}
+            </Suspense>
+            {visible && (
+                <Sparkles 
+                    count={40}
+                    scale={[25, 5, 5]}
+                    size={4}
+                    speed={0.4}
+                    opacity={0.8}
+                    color="#FFD700"
+                    noise={1}
+                />
+            )}
         </group>
     );
 };
@@ -553,13 +741,16 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
   const handleItemClick = (e: any, item: MediaItem) => {
     if (!areItemsVisible) return;
     const worldPos = item.position!.clone();
-    worldPos.project(camera);
+    const clickedObject = e.object; 
+    const targetVec = new THREE.Vector3();
+    clickedObject.getWorldPosition(targetVec);
+    targetVec.project(camera);
     const hudCamZ = 10;
     const vFov = 50; 
     const visibleHeight = 2 * Math.tan(THREE.MathUtils.degToRad(vFov) / 2) * hudCamZ;
     const visibleWidth = visibleHeight * (size.width / size.height);
-    const hudX = (worldPos.x * visibleWidth) / 2;
-    const hudY = (worldPos.y * visibleHeight) / 2;
+    const hudX = (targetVec.x * visibleWidth) / 2;
+    const hudY = (targetVec.y * visibleHeight) / 2;
     setStartPos(new THREE.Vector3(hudX, hudY, 0));
     setActiveItem(item);
     setIsClosing(false);
@@ -612,6 +803,7 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOn
   const meshSphereRef = useRef<THREE.InstancedMesh>(null);
   const meshGlareRef = useRef<THREE.InstancedMesh>(null);
   const meshHaloRef = useRef<THREE.InstancedMesh>(null);
+  const mediaGroupRef = useRef<THREE.Group>(null);
   
   const glareMatRef = useRef<THREE.ShaderMaterial>(null);
   const haloMatRef = useRef<THREE.ShaderMaterial>(null);
@@ -648,7 +840,6 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOn
       const shapeType = Math.floor(Math.random() * 5);
       typeCounts[shapeType]++;
       // OPTIMIZATION: Drastically reduce glare count.
-      // Only 10% of particles will have glare, and only if they are relatively large/important
       if (Math.random() < 0.1) {
           gIndices.push(i);
           const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
@@ -787,6 +978,11 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOn
     meshSphereRef.current!.rotation.y = newRotY;
     if (meshGlareRef.current) meshGlareRef.current.rotation.y = newRotY;
     if (meshHaloRef.current) meshHaloRef.current.rotation.y = newRotY;
+    
+    // SYNC MEDIA ROTATION WITH PARTICLES
+    if (mediaGroupRef.current) {
+        mediaGroupRef.current.rotation.y = newRotY;
+    }
 
     let idx0 = 0, idx1 = 0, idx2 = 0, idx3 = 0, idx4 = 0;
     particles.forEach((particle, i) => {
@@ -859,7 +1055,18 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOn
         <haloMaterial ref={haloMatRef} transparent={true} depthWrite={false} blending={THREE.AdditiveBlending} />
       </instancedMesh>
 
-      <MediaGallery shape={shape} showMediaOnly={showMediaOnly} />
+      {/* Rotating Group for Media */}
+      <group ref={mediaGroupRef}>
+          <ErrorBoundary fallback={null}>
+            <MediaGallery shape={shape} showMediaOnly={showMediaOnly} />
+          </ErrorBoundary>
+      </group>
+
+      {/* Merry Christmas Text (Does not rotate with scene) */}
+      <ErrorBoundary fallback={null}>
+         <MerryChristmasText visible={shape === ShapeType.TREE && !showMediaOnly} />
+      </ErrorBoundary>
+
     </group>
   );
 };
