@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect, Suspense, ReactNode, Component } from 'react';
 import { useFrame, useThree, extend, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial, useVideoTexture, Hud, PerspectiveCamera, Text, Sparkles } from '@react-three/drei';
+import { shaderMaterial, useVideoTexture, Hud, PerspectiveCamera, Text, Sparkles, Environment } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -360,8 +360,8 @@ const calculateMediaPositions = (items: MediaItem[]) => {
     
     // VOLUME DISTRIBUTION:
     // r = R * sqrt(random) ensures uniform distribution on a disk area.
-    // We add a small core offset (0.2) so items don't get stuck inside the central trunk
-    const randomR = coneMaxRadius * (0.2 + 0.8 * Math.sqrt(Math.random()));
+    // We add a small core offset (0.1) so items don't get stuck inside the central trunk
+    const randomR = coneMaxRadius * (0.1 + 0.9 * Math.sqrt(Math.random()));
 
     // Calculate angle using golden angle spiral
     const theta = i * phi; 
@@ -513,16 +513,16 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
     <group>
       <mesh>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial map={texture} toneMapped={false} transparent />
+        <meshBasicMaterial map={texture} toneMapped={false} transparent color="white" />
       </mesh>
       {/* Background Frame - METALLIC GOLD BORDER (Behind the image) */}
-      <mesh position={[0, 0, -0.02]}>
+      <mesh position={[0, 0, -0.05]}>
         <boxGeometry args={[width + 0.3, height + 0.3, 0.05]} />
         <meshStandardMaterial 
           color="#FFD700" 
           metalness={1.0} 
-          roughness={0.15} 
-          envMapIntensity={2.5} 
+          roughness={0.1} 
+          envMapIntensity={2.0} 
         />
       </mesh>
     </group>
@@ -550,16 +550,16 @@ const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
     <group>
       <mesh>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial map={texture} toneMapped={false} />
+        <meshBasicMaterial map={texture} toneMapped={false} color="white" />
       </mesh>
       {/* Background Frame - METALLIC GOLD BORDER (Behind the video) */}
-      <mesh position={[0, 0, -0.02]}>
+      <mesh position={[0, 0, -0.05]}>
          <boxGeometry args={[width + 0.3, height + 0.3, 0.05]} />
          <meshStandardMaterial 
             color="#FFD700" 
             metalness={1.0} 
-            roughness={0.15} 
-            envMapIntensity={2.5} 
+            roughness={0.1} 
+            envMapIntensity={2.0} 
          />
       </mesh>
     </group>
@@ -782,6 +782,9 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
       {activeItem && (
         <Hud renderPriority={1}>
            <PerspectiveCamera makeDefault position={[0, 0, 10]} fov={50} />
+           <ambientLight intensity={1} /> 
+           <pointLight position={[5, 5, 5]} intensity={2} />
+           <Environment preset="city" /> 
            <mesh onClick={triggerClose} position={[0, 0, -2]}>
               <planeGeometry args={[100, 100]} />
               <meshBasicMaterial color="black" transparent opacity={0.0} depthTest={false} />
