@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState, useEffect, Suspense, Component } from 'react';
-import { useFrame, useThree, extend } from '@react-three/fiber';
+import React, { useMemo, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import { useFrame, useThree, extend, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
-import { shaderMaterial, Image, useVideoTexture, Billboard, useTexture, Hud, PerspectiveCamera, Text } from '@react-three/drei';
+import { shaderMaterial, useVideoTexture, Hud, PerspectiveCamera, Text } from '@react-three/drei';
 import { ShapeType } from '../types';
 
 interface ParticleSceneProps {
@@ -16,10 +16,54 @@ const TREE_RADIUS = 8;
 const STAR_COUNT = 800;
 const GARLAND_COUNT = 2500;
 
-// --- Error Boundary for INDIVIDUAL Media Item ---
+// --- RESOURCE CACHE FOR BLOB LOADING (Fixes CORS/Redirects) ---
+const blobCache = new Map<string, { status: 'pending' | 'resolved' | 'rejected', data?: string, promise?: Promise<string>, error?: any }>();
+
+function useBlobUrl(url: string) {
+  if (blobCache.has(url)) {
+    const entry = blobCache.get(url)!;
+    if (entry.status === 'resolved') return entry.data!;
+    if (entry.status === 'rejected') throw entry.error;
+    if (entry.status === 'pending') throw entry.promise;
+  }
+
+  const fetchWithFallback = async (originalUrl: string) => {
+      const tryUrl = async (u: string) => {
+          // Standard fetch. For wsrv.nl (images), CORS is handled by the proxy.
+          // For videos, we try direct fetch.
+          const res = await fetch(u);
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          return await res.blob();
+      };
+
+      try {
+          return await tryUrl(originalUrl);
+      } catch (err) {
+          console.warn(`Failed loading: ${originalUrl}`, err);
+          throw err; 
+      }
+  };
+
+  const promise = fetchWithFallback(url)
+    .then((blob) => {
+      const objUrl = URL.createObjectURL(blob);
+      blobCache.set(url, { status: 'resolved', data: objUrl });
+      return objUrl;
+    })
+    .catch((err) => {
+      console.error("Blob Load Final Error:", err);
+      blobCache.set(url, { status: 'rejected', error: err });
+      throw err;
+    });
+
+  blobCache.set(url, { status: 'pending', promise });
+  throw promise; 
+}
+
+// --- Error Boundary ---
 interface ErrorBoundaryProps {
-  children?: React.ReactNode;
-  fallback?: React.ReactNode;
+  children?: ReactNode;
+  fallback?: ReactNode;
   onError?: (error: any, info: any) => void;
 }
 
@@ -27,13 +71,13 @@ interface ErrorBoundaryState {
   hasError: boolean;
 }
 
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
+  static getDerivedStateFromError(error: any): ErrorBoundaryState {
     return { hasError: true };
   }
 
@@ -49,12 +93,11 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-// --- 0. Soft Halo Material ---
+// --- Shaders ---
+
+// 1. Halo Material (Slower breathe)
 const HaloMaterial = shaderMaterial(
-  {
-    uTime: 0,
-    uColor: new THREE.Color(1.0, 0.6, 0.1), 
-  },
+  { uTime: 0, uColor: new THREE.Color(1.0, 0.6, 0.1) },
   `
     varying vec2 vUv;
     varying float vScale;
@@ -62,16 +105,13 @@ const HaloMaterial = shaderMaterial(
     void main() {
       vUv = uv;
       vec4 worldPosition = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-      vec3 scale = vec3(
-        length(vec3(instanceMatrix[0].x, instanceMatrix[0].y, instanceMatrix[0].z)),
-        length(vec3(instanceMatrix[1].x, instanceMatrix[1].y, instanceMatrix[1].z)),
-        length(vec3(instanceMatrix[2].x, instanceMatrix[2].y, instanceMatrix[2].z))
-      );
+      vec3 scale = vec3(length(vec3(instanceMatrix[0].x, instanceMatrix[0].y, instanceMatrix[0].z)), length(vec3(instanceMatrix[1].x, instanceMatrix[1].y, instanceMatrix[1].z)), length(vec3(instanceMatrix[2].x, instanceMatrix[2].y, instanceMatrix[2].z)));
       vScale = scale.x;
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
       float size = vScale * 6.0; 
-      float breathe = 1.0 + 0.15 * sin(uTime * 3.0 + worldPosition.x * 10.0 + worldPosition.y * 5.0);
+      // Slower breathe: uTime * 1.0 instead of 3.0
+      float breathe = 1.0 + 0.15 * sin(uTime * 1.0 + worldPosition.x * 10.0 + worldPosition.y * 5.0);
       size *= breathe;
       vec3 pos = worldPosition.xyz + (camRight * position.x + camUp * position.y) * size;
       gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.0);
@@ -92,7 +132,6 @@ const HaloMaterial = shaderMaterial(
   `
 );
 
-// --- 0.5 Meteor Material ---
 const MeteorMaterial = shaderMaterial(
   { uTime: 0 },
   `
@@ -122,68 +161,9 @@ const MeteorMaterial = shaderMaterial(
   `
 );
 
-const useDiffractionTexture = () => {
-  return useMemo(() => {
-    const size = 512;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return new THREE.Texture();
-    const cx = size / 2;
-    const cy = size / 2;
-    ctx.clearRect(0, 0, size, size);
-    ctx.globalCompositeOperation = 'screen'; 
-    const drawSpike = (length: number, width: number, angleDeg: number, colorStart: string, colorEnd: string) => {
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate((angleDeg * Math.PI) / 180);
-      const grad = ctx.createLinearGradient(0, 0, length, 0);
-      grad.addColorStop(0, colorStart);
-      grad.addColorStop(0.15, colorStart);
-      grad.addColorStop(0.5, colorEnd);
-      grad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.moveTo(0, -width);
-      ctx.lineTo(length, 0);
-      ctx.lineTo(0, width);
-      ctx.fill();
-      ctx.restore();
-    };
-    const coreWhite = 'rgba(255, 255, 255, 1.0)';
-    const warmGlow = 'rgba(255, 200, 100, 0.5)';
-    const spectral = 'rgba(150, 200, 255, 0.3)'; 
-    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.04);
-    glow.addColorStop(0, 'rgba(255, 255, 255, 1)');
-    glow.addColorStop(0.5, 'rgba(255, 240, 220, 0.4)');
-    glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(cx, cy, size * 0.04, 0, Math.PI * 2);
-    ctx.fill();
-    drawSpike(size * 0.4, 2.0, 0, coreWhite, warmGlow);
-    drawSpike(size * 0.4, 2.0, 90, coreWhite, warmGlow);
-    drawSpike(size * 0.4, 2.0, 180, coreWhite, warmGlow);
-    drawSpike(size * 0.4, 2.0, 270, coreWhite, warmGlow);
-    const diagLen = size * 0.2;
-    drawSpike(diagLen, 1.0, 45, warmGlow, spectral);
-    drawSpike(diagLen, 1.0, 135, warmGlow, spectral);
-    drawSpike(diagLen, 1.0, 225, warmGlow, spectral);
-    drawSpike(diagLen, 1.0, 315, warmGlow, spectral);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    return texture;
-  }, []);
-};
-
+// 2. Physical Glare Material (Much Slower, Very Subtle)
 const PhysicalGlareMaterial = shaderMaterial(
-  {
-    uTime: 0,
-    uTex: new THREE.Texture(),
-    uLightPos: new THREE.Vector3(0, 0, 0), 
-    uCamPos: new THREE.Vector3(0, 0, 0),   
-  },
+  { uTime: 0, uTex: new THREE.Texture(), uLightPos: new THREE.Vector3(0, 0, 0), uCamPos: new THREE.Vector3(0, 0, 0) },
   `
     attribute vec3 aRandomNormal; 
     varying vec2 vUv;
@@ -204,11 +184,16 @@ const PhysicalGlareMaterial = shaderMaterial(
       float NdotH = max(0.0, dot(worldNormal, halfVector));
       float specular = pow(NdotH, 15.0); 
       specular += pow(NdotH, 10.0) * 0.15;
-      float breathe = sin(uTime * 3.0 + worldPosition.x * 0.5) * 0.3 + 0.7;
-      vIntensity = specular * breathe * 4.0;
+      
+      // Much Slower breathe: uTime * 0.5 (was 3.0 originally)
+      // Range: 0.8 to 0.9 (Very subtle pulse)
+      float breathe = sin(uTime * 0.5 + worldPosition.x * 0.5) * 0.05 + 0.85;
+      
+      vIntensity = specular * breathe * 1.0; // Reduced multiplier to 1.0 (was 4.0)
+      
       vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
       vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
-      float glareSize = particleScale * (1.0 + vIntensity * 0.75); 
+      float glareSize = particleScale * (1.0 + vIntensity * 0.5); 
       vec3 offset = (camRight * position.x + camUp * position.y) * glareSize;
       vec3 finalPos = surfacePos + offset;
       finalPos += viewDir * (particleScale * 0.1);
@@ -225,12 +210,37 @@ const PhysicalGlareMaterial = shaderMaterial(
       vec3 hotWhite = vec3(1.0, 1.0, 1.0);
       vec3 golden   = vec3(1.0, 0.8, 0.1); 
       vec3 finalColor = mix(golden, hotWhite, texColor.a * vIntensity * 0.5);
-      gl_FragColor = vec4(finalColor, texColor.a * min(vIntensity, 1.5));
+      // Soft cap on alpha/intensity to prevent harsh flashing
+      gl_FragColor = vec4(finalColor, texColor.a * min(vIntensity, 1.0)); 
     }
   `
 );
 
 extend({ PhysicalGlareMaterial, HaloMaterial, MeteorMaterial });
+
+const useDiffractionTexture = () => {
+  return useMemo(() => {
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return new THREE.Texture();
+    const cx = size / 2;
+    const cy = size / 2;
+    ctx.clearRect(0, 0, size, size);
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.5);
+    glow.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }, []);
+};
 
 // --- Media Gallery Types & Data ---
 type MediaType = 'image' | 'video';
@@ -242,19 +252,27 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
-// CHANGED: Update URL to GitHub Releases Download Format
-// Format: https://github.com/<user>/<repo>/releases/download/<tag>/<file>
-const BASE_ASSET_URL = 'https://github.com/happyletty/particle/releases/download/1.0';
+// Helper: Wrap GitHub Release image URLs in a CORS proxy (wsrv.nl)
+// This fixes the "302 Found" redirect issues with WebGL textures
+const getProxiedImageUrl = (filename: string) => {
+    // wsrv.nl expects "github.com/..." without https://
+    return `https://wsrv.nl/?url=github.com/happyletty/particle/releases/download/1.0/${filename}&w=512&q=80`;
+};
+
+// Video URLs (Proxying video is harder, using direct link with CORS hope, fallback handled by ErrorBoundary)
+const getVideoUrl = (filename: string) => {
+    return `https://github.com/happyletty/particle/releases/download/1.0/${filename}`;
+};
 
 const RAW_MEDIA_CONTENT: MediaItem[] = [
   ...Array.from({ length: 25 }, (_, i) => ({
     id: i + 1,
     type: 'image' as const,
-    url: `${BASE_ASSET_URL}/${i + 1}.jpg`
+    url: getProxiedImageUrl(`${i + 1}.jpg`) // Use Proxy
   })),
-  { id: 101, type: 'video' as const, url: `${BASE_ASSET_URL}/1.mp4` },
-  { id: 102, type: 'video' as const, url: `${BASE_ASSET_URL}/2.mp4` },
-  { id: 103, type: 'video' as const, url: `${BASE_ASSET_URL}/3.mp4` },
+  { id: 101, type: 'video' as const, url: getVideoUrl('1.mp4') },
+  { id: 102, type: 'video' as const, url: getVideoUrl('2.mp4') },
+  { id: 103, type: 'video' as const, url: getVideoUrl('3.mp4') },
 ];
 
 const calculateMediaPositions = (items: MediaItem[]) => {
@@ -276,50 +294,39 @@ const calculateMediaPositions = (items: MediaItem[]) => {
   });
 };
 
-// --- Fallback & Loading Components ---
-
-// UPDATED: Now accepts 'visible' prop to animate transition out in Galaxy mode
+// --- Fallback Components ---
 const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = ({ position, visible }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const scaleRef = useRef(0);
-
   useFrame((state, delta) => {
     if(meshRef.current) {
         meshRef.current.lookAt(state.camera.position);
-        
-        // Animate scale based on visibility
         const targetScale = visible ? 1.0 : 0.0;
         scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
         meshRef.current.scale.setScalar(scaleRef.current);
     }
   });
-
   return (
     <mesh ref={meshRef} position={position}>
       <boxGeometry args={[0.5, 0.5, 0.5]} />
-      <meshStandardMaterial color="#ff4444" wireframe transparent opacity={0.5} />
-      <Text position={[0,0,0]} fontSize={0.1} color="white">!</Text>
+      <meshStandardMaterial color="#ef4444" wireframe transparent opacity={0.5} />
+      <Text position={[0,0,0.4]} fontSize={0.1} color="white" anchorX="center" anchorY="middle">!</Text>
     </mesh>
   );
 };
 
-// UPDATED: Now accepts 'visible' prop to animate transition out in Galaxy mode
 const LoadingPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = ({ position, visible }) => {
     const meshRef = useRef<THREE.Mesh>(null);
     const scaleRef = useRef(0);
-
     useFrame((state, delta) => {
       if(meshRef.current) {
           meshRef.current.lookAt(state.camera.position);
           meshRef.current.rotation.z += 0.05;
-          
-          // Animate scale based on visibility
           const targetScale = visible ? 0.5 : 0.0;
           scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
           meshRef.current.scale.setScalar(scaleRef.current);
       }
     });
-    
     return (
       <mesh ref={meshRef} position={position}>
         <ringGeometry args={[0.2, 0.25, 32]} />
@@ -329,7 +336,6 @@ const LoadingPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean 
 };
 
 // --- Media Components ---
-
 const HolographicPanel: React.FC<{ 
   texture: THREE.Texture, 
   item: MediaItem, 
@@ -340,7 +346,6 @@ const HolographicPanel: React.FC<{
   const groupRef = useRef<THREE.Group>(null);
   const [hovered, setHover] = useState(false);
   const scaleRef = useRef(0);
-  
   const BASE_SIZE = 0.5;
 
   useFrame((state, delta) => {
@@ -364,58 +369,64 @@ const HolographicPanel: React.FC<{
     >
       <mesh position={[0, 0, -0.05]}>
          <boxGeometry args={[BASE_SIZE * 1.1, BASE_SIZE * 1.1, 0.02]} />
-         <meshStandardMaterial 
-            color={hovered ? "#ffffff" : "#cccccc"} 
-            metalness={0.9}
-            roughness={0.2}
-            envMapIntensity={1.5}
-         />
+         <meshStandardMaterial color={hovered ? "#ffffff" : "#cccccc"} metalness={0.9} roughness={0.2} envMapIntensity={1.5} />
       </mesh>
-
-      {/* Dark backing to ensure visibility if texture is loading/transparent */}
       <mesh position={[0, 0, 0.005]}>
           <planeGeometry args={[BASE_SIZE, BASE_SIZE]} />
           <meshBasicMaterial color="#222" />
       </mesh>
-
       <mesh position={[0, 0, 0.01]}>
         <planeGeometry args={[BASE_SIZE, BASE_SIZE]} />
-        <meshBasicMaterial 
-          map={texture} 
-          side={THREE.DoubleSide}
-          toneMapped={false}
-          transparent={true} 
-          color="white"
-        />
+        <meshBasicMaterial map={texture} side={THREE.DoubleSide} toneMapped={false} transparent={true} color="white" />
       </mesh>
     </group>
   );
 };
 
 const ImageLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
-    // Add crossOrigin anonymous to allow texture loading from external domain (GitHub Releases)
-    const texture = useTexture(item.url);
+    // Images are proxied via wsrv.nl so they are safe to load
+    const blobUrl = useBlobUrl(item.url); 
+    const texture = useLoader(THREE.TextureLoader, blobUrl);
     texture.colorSpace = THREE.SRGBColorSpace;
+    // Ensure texture updates if the blob loads late
+    useEffect(() => {
+        texture.needsUpdate = true;
+    }, [texture]);
     return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} />;
 };
 
 const VideoLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
-    // Add crossOrigin anonymous
-    const texture = useVideoTexture(item.url, { muted: true, loop: true, start: true, playsInline: true, crossOrigin: 'anonymous' });
+    // Videos might fail if they are GitHub Releases. 
+    // If you own the repo, please commit .mp4 files to the repo and use raw.githubusercontent.com
+    // For now we try the blob loader.
+    const blobUrl = useBlobUrl(item.url); 
+    // IMPORTANT: removed crossOrigin: 'anonymous' because blob URLs are local/same-origin
+    const texture = useVideoTexture(blobUrl, { 
+        muted: true, loop: true, start: true, playsInline: true 
+    });
     return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} isVideo />;
 };
 
 // --- Preview Components ---
+const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
+  const blobUrl = useBlobUrl(url);
+  const texture = useLoader(THREE.TextureLoader, blobUrl);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return (
+    <mesh>
+      <planeGeometry args={[1.6, 1]} />
+      <meshBasicMaterial map={texture} toneMapped={false} transparent />
+    </mesh>
+  );
+};
 
 const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
-  const texture = useVideoTexture(url, { muted: false, loop: true, start: true, playsInline: true, crossOrigin: 'anonymous' });
+  const blobUrl = useBlobUrl(url);
+  // Remove crossOrigin for blob
+  const texture = useVideoTexture(blobUrl, { muted: false, loop: true, start: true, playsInline: true });
   useEffect(() => {
     const video = texture.image;
-    if(video) {
-        video.muted = false;
-        video.volume = 1.0;
-        video.play().catch((e: any) => console.log("Video play error", e));
-    }
+    if(video) { video.muted = false; video.volume = 1.0; video.play().catch(console.error); }
   }, [texture]);
   return (
     <mesh>
@@ -437,16 +448,12 @@ const AnimatedPreview: React.FC<{
     const progress = useRef(0);
     
     useEffect(() => {
-        if (!isClosing) {
-            progress.current = 0;
-            setTargetZoom(1);
-        }
+        if (!isClosing) { progress.current = 0; setTargetZoom(1); }
     }, [isClosing, item]);
 
     useEffect(() => {
         const handleWheel = (e: WheelEvent) => {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             const sensitivity = 0.0015;
             setTargetZoom(prev => Math.max(0.2, Math.min(prev - (e.deltaY * sensitivity), 5.0)));
         };
@@ -459,10 +466,7 @@ const AnimatedPreview: React.FC<{
         const speed = delta * 3.0;
         if (isClosing) {
             progress.current -= speed;
-            if (progress.current <= 0) {
-                progress.current = 0;
-                onCloseComplete();
-            }
+            if (progress.current <= 0) { progress.current = 0; onCloseComplete(); }
         } else {
             progress.current += speed;
             if (progress.current >= 1) progress.current = 1;
@@ -475,14 +479,15 @@ const AnimatedPreview: React.FC<{
 
     return (
         <group ref={groupRef} position={startPos} scale={0}>
-             {/* Backing for preview */}
              <mesh position={[0,0,-0.1]}>
                  <planeGeometry args={[item.type === 'image' ? 3 * 1.6 : 4, item.type === 'image' ? 3 : 2.25]} />
                  <meshBasicMaterial color="black" transparent opacity={0.8} />
              </mesh>
              {item.type === 'image' ? (
                  <group scale={3}>
-                    <Image url={item.url} scale={[1.6, 1]} toneMapped={false} />
+                    <Suspense fallback={<mesh><planeGeometry args={[1.6,1]} /><meshBasicMaterial color="#333" /></mesh>}>
+                        <PreviewImage url={item.url} />
+                    </Suspense>
                  </group>
              ) : (
                 <group scale={1}>
@@ -524,15 +529,8 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
     setIsClosing(false);
   };
 
-  const triggerClose = (e: any) => {
-    e.stopPropagation();
-    setIsClosing(true);
-  };
-
-  const handleCloseComplete = () => {
-      setActiveItem(null);
-      setIsClosing(false);
-  };
+  const triggerClose = (e: any) => { e.stopPropagation(); setIsClosing(true); };
+  const handleCloseComplete = () => { setActiveItem(null); setIsClosing(false); };
 
   return (
     <>
@@ -540,14 +538,10 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
         {itemsWithPos.map((item) => (
            <ErrorBoundary 
               key={item.id} 
-              // PASS VISIBILITY TO FALLBACK
               fallback={<ErrorPlaceholder position={item.position} visible={areItemsVisible} />}
               onError={(err) => console.warn(`Media item ${item.url} failed.`, err)}
            >
-             <Suspense fallback={
-                // PASS VISIBILITY TO FALLBACK
-                <LoadingPlaceholder position={item.position} visible={areItemsVisible} />
-             }>
+             <Suspense fallback={<LoadingPlaceholder position={item.position} visible={areItemsVisible} />}>
                {item.type === 'video' ? (
                   <VideoLoader item={item} onClick={handleItemClick} visible={areItemsVisible && activeItem?.id !== item.id} />
                ) : (
@@ -617,9 +611,14 @@ export const ParticleScene: React.FC<ParticleSceneProps> = ({ shape, showMediaOn
     for (let i = 0; i < TOTAL_COUNT; i++) {
       const shapeType = Math.floor(Math.random() * 5);
       typeCounts[shapeType]++;
-      gIndices.push(i);
-      const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-      gNormals.push(v.x, v.y, v.z);
+      // OPTIMIZATION: Drastically reduce glare count.
+      // Only 10% of particles will have glare, and only if they are relatively large/important
+      if (Math.random() < 0.1) {
+          gIndices.push(i);
+          const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+          gNormals.push(v.x, v.y, v.z);
+      }
+      
       const t = Math.random();
       const radius = Math.pow(t, 1.2) * GALAXY_RADIUS; 
       const distRatio = radius / GALAXY_RADIUS;
@@ -869,8 +868,9 @@ export const ShootingStars: React.FC<{ visible?: boolean }> = ({ visible = true 
     useFrame((state, delta) => {
         if (!meshRef.current) return;
         const camera = state.camera; const time = state.clock.getElapsedTime();
+        // Spawns much less frequently (5.0s base + random)
         if (time > controller.current.nextSpawnTime) {
-            if (controller.current.burstRemaining === 0) controller.current.burstRemaining = 1 + Math.floor(Math.random() * 3);
+            if (controller.current.burstRemaining === 0) controller.current.burstRemaining = 1 + Math.floor(Math.random() * 2);
             const availableMeteor = meteors.current.find(m => !m.active);
             if (availableMeteor) {
                 const fadeDuration = (Math.random() * 1.5) * 0.5; const life = 0.4 + Math.random() * 0.2 + fadeDuration; 
@@ -886,7 +886,7 @@ export const ShootingStars: React.FC<{ visible?: boolean }> = ({ visible = true 
                 meshRef.current.setColorAt(meteors.current.indexOf(availableMeteor), new THREE.Color(1,1,1));
                 controller.current.burstRemaining--;
                 if (controller.current.burstRemaining > 0) controller.current.nextSpawnTime = time + 0.1 + Math.random() * 0.4;
-                else { const interval = 2.0 + Math.random() * 3.0; controller.current.nextSpawnTime = time + life + interval; }
+                else { const interval = 5.0 + Math.random() * 4.0; controller.current.nextSpawnTime = time + life + interval; }
             } else controller.current.nextSpawnTime = time + 0.1;
         }
         meteors.current.forEach((m, i) => {
