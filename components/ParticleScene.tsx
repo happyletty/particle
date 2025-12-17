@@ -242,7 +242,9 @@ interface MediaItem {
   position?: THREE.Vector3;
 }
 
-const BASE_ASSET_URL = 'https://raw.githubusercontent.com/happyletty/particle/1.0/assets';
+// CHANGED: Update URL to GitHub Releases Download Format
+// Format: https://github.com/<user>/<repo>/releases/download/<tag>/<file>
+const BASE_ASSET_URL = 'https://github.com/happyletty/particle/releases/download/1.0';
 
 const RAW_MEDIA_CONTENT: MediaItem[] = [
   ...Array.from({ length: 25 }, (_, i) => ({
@@ -276,13 +278,22 @@ const calculateMediaPositions = (items: MediaItem[]) => {
 
 // --- Fallback & Loading Components ---
 
-const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3 }> = ({ position }) => {
+// UPDATED: Now accepts 'visible' prop to animate transition out in Galaxy mode
+const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = ({ position, visible }) => {
   const meshRef = useRef<THREE.Mesh>(null);
-  useFrame((state) => {
+  const scaleRef = useRef(0);
+
+  useFrame((state, delta) => {
     if(meshRef.current) {
         meshRef.current.lookAt(state.camera.position);
+        
+        // Animate scale based on visibility
+        const targetScale = visible ? 1.0 : 0.0;
+        scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
+        meshRef.current.scale.setScalar(scaleRef.current);
     }
   });
+
   return (
     <mesh ref={meshRef} position={position}>
       <boxGeometry args={[0.5, 0.5, 0.5]} />
@@ -292,16 +303,25 @@ const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3 }> = ({ position }) 
   );
 };
 
-const LoadingPlaceholder: React.FC<{ position?: THREE.Vector3, scale?: number }> = ({ position, scale = 1 }) => {
+// UPDATED: Now accepts 'visible' prop to animate transition out in Galaxy mode
+const LoadingPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = ({ position, visible }) => {
     const meshRef = useRef<THREE.Mesh>(null);
-    useFrame((state) => {
+    const scaleRef = useRef(0);
+
+    useFrame((state, delta) => {
       if(meshRef.current) {
           meshRef.current.lookAt(state.camera.position);
           meshRef.current.rotation.z += 0.05;
+          
+          // Animate scale based on visibility
+          const targetScale = visible ? 0.5 : 0.0;
+          scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
+          meshRef.current.scale.setScalar(scaleRef.current);
       }
     });
+    
     return (
-      <mesh ref={meshRef} position={position} scale={scale}>
+      <mesh ref={meshRef} position={position}>
         <ringGeometry args={[0.2, 0.25, 32]} />
         <meshBasicMaterial color="#4fc3f7" transparent opacity={0.6} side={THREE.DoubleSide} />
       </mesh>
@@ -373,19 +393,22 @@ const HolographicPanel: React.FC<{
 };
 
 const ImageLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
+    // Add crossOrigin anonymous to allow texture loading from external domain (GitHub Releases)
     const texture = useTexture(item.url);
+    texture.colorSpace = THREE.SRGBColorSpace;
     return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} />;
 };
 
 const VideoLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
-    const texture = useVideoTexture(item.url, { muted: true, loop: true, start: true, playsInline: true });
+    // Add crossOrigin anonymous
+    const texture = useVideoTexture(item.url, { muted: true, loop: true, start: true, playsInline: true, crossOrigin: 'anonymous' });
     return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} isVideo />;
 };
 
 // --- Preview Components ---
 
 const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
-  const texture = useVideoTexture(url, { muted: false, loop: true, start: true, playsInline: true });
+  const texture = useVideoTexture(url, { muted: false, loop: true, start: true, playsInline: true, crossOrigin: 'anonymous' });
   useEffect(() => {
     const video = texture.image;
     if(video) {
@@ -517,13 +540,13 @@ const MediaGallery: React.FC<{ shape: ShapeType, showMediaOnly: boolean }> = ({ 
         {itemsWithPos.map((item) => (
            <ErrorBoundary 
               key={item.id} 
-              fallback={<ErrorPlaceholder position={item.position} />}
+              // PASS VISIBILITY TO FALLBACK
+              fallback={<ErrorPlaceholder position={item.position} visible={areItemsVisible} />}
               onError={(err) => console.warn(`Media item ${item.url} failed.`, err)}
            >
              <Suspense fallback={
-                <mesh position={item.position} scale={areItemsVisible ? 1 : 0}>
-                   <LoadingPlaceholder scale={0.5} />
-                </mesh>
+                // PASS VISIBILITY TO FALLBACK
+                <LoadingPlaceholder position={item.position} visible={areItemsVisible} />
              }>
                {item.type === 'video' ? (
                   <VideoLoader item={item} onClick={handleItemClick} visible={areItemsVisible && activeItem?.id !== item.id} />
