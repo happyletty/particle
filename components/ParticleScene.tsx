@@ -414,6 +414,8 @@ const HolographicPanel: React.FC<{
 
   const renderHeight = BASE_SIZE;
   const renderWidth = BASE_SIZE; 
+  // THICKNESS: Increased Z-depth for the frame
+  const FRAME_THICKNESS = 0.15;
 
   useFrame((state, delta) => {
     if (groupRef.current) {
@@ -439,10 +441,17 @@ const HolographicPanel: React.FC<{
       onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
       onPointerOut={() => setHover(false)}
     >
-      <mesh position={[0, 0, -0.05]}>
-         <boxGeometry args={[renderWidth * 1.1, renderHeight * 1.1, 0.02]} />
-         <meshStandardMaterial color={hovered ? "#ffffff" : "#cccccc"} metalness={0.9} roughness={0.2} envMapIntensity={1.5} />
+      {/* 3D Frame Body */}
+      <mesh position={[0, 0, -FRAME_THICKNESS / 2]}>
+         <boxGeometry args={[renderWidth * 1.1, renderHeight * 1.1, FRAME_THICKNESS]} />
+         <meshStandardMaterial 
+            color={hovered ? "#fff5cc" : "#FFD700"} 
+            metalness={1.0} 
+            roughness={0.2} 
+            envMapIntensity={2.0} 
+         />
       </mesh>
+      {/* Content Plane - Pushed slightly forward to sit on the face of the box */}
       <mesh position={[0, 0, 0.01]}>
         <planeGeometry args={[renderWidth, renderHeight]} />
         {/* @ts-ignore */}
@@ -508,16 +517,18 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
   const aspect = (image && image.width && image.height) ? image.width / image.height : 1.6;
   const height = 4.5; 
   const width = height * aspect;
+  const THICKNESS = 0.2;
 
   return (
     <group>
-      <mesh>
+      {/* Image on front face */}
+      <mesh position={[0, 0, THICKNESS / 2 + 0.01]}>
         <planeGeometry args={[width, height]} />
         <meshBasicMaterial map={texture} toneMapped={false} transparent color="white" />
       </mesh>
-      {/* Background Frame - METALLIC GOLD BORDER (Behind the image) */}
-      <mesh position={[0, 0, -0.05]}>
-        <boxGeometry args={[width + 0.3, height + 0.3, 0.05]} />
+      {/* Thick Metallic Gold Block Behind */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[width + 0.3, height + 0.3, THICKNESS]} />
         <meshStandardMaterial 
           color="#FFD700" 
           metalness={1.0} 
@@ -545,16 +556,17 @@ const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
   
   const height = 4.5;
   const width = height * aspect;
+  const THICKNESS = 0.2;
 
   return (
     <group>
-      <mesh>
+      <mesh position={[0, 0, THICKNESS / 2 + 0.01]}>
         <planeGeometry args={[width, height]} />
         <meshBasicMaterial map={texture} toneMapped={false} color="white" />
       </mesh>
-      {/* Background Frame - METALLIC GOLD BORDER (Behind the video) */}
-      <mesh position={[0, 0, -0.05]}>
-         <boxGeometry args={[width + 0.3, height + 0.3, 0.05]} />
+      {/* Thick Metallic Gold Block Behind */}
+      <mesh position={[0, 0, 0]}>
+         <boxGeometry args={[width + 0.3, height + 0.3, THICKNESS]} />
          <meshStandardMaterial 
             color="#FFD700" 
             metalness={1.0} 
@@ -646,11 +658,11 @@ const AnimatedLetter: React.FC<{ char: string, index: number, total: number, vis
         if (visible) {
              // Random flicker logic
              // Base visibility
-             const base = 0.8; 
+             const base = 0.85; 
              // Random noise per letter
              const noise = Math.sin(time * 8 + index * 123.45);
              // Occasional dip in brightness (flicker)
-             const flicker = noise > 0.5 ? 1.0 : (noise < -0.8 ? 0.3 : 0.85);
+             const flicker = noise > 0.6 ? 1.0 : (noise < -0.85 ? 0.3 : 0.9);
              targetOp = base * flicker;
         }
         
@@ -670,10 +682,11 @@ const AnimatedLetter: React.FC<{ char: string, index: number, total: number, vis
             <meshStandardMaterial
                 ref={matRef}
                 color="#FFD700"
+                emissive="#FFD700"
+                emissiveIntensity={1.5}
+                toneMapped={false}
                 metalness={1.0}
                 roughness={0.15}
-                emissive="#ffaa00"
-                emissiveIntensity={0.3}
                 transparent
                 depthWrite={false}
                 opacity={0}
@@ -692,11 +705,12 @@ const MerryChristmasText: React.FC<{ visible: boolean }> = ({ visible }) => {
         if (!groupRef.current) return;
         // Slow floating motion
         const time = state.clock.getElapsedTime();
+        // Position fixed at Z=14 to be clearly in front of the tree (radius 8-10)
         groupRef.current.position.y = 4 + Math.sin(time * 0.5) * 0.5;
     });
 
     return (
-        <group ref={groupRef} position={[0, 4, 10]}>
+        <group ref={groupRef} position={[0, 4, 14]}>
             <Suspense fallback={null}>
                 {letters.map((char, i) => (
                     <AnimatedLetter 
