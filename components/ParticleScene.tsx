@@ -72,10 +72,7 @@ interface ErrorBoundaryState {
 }
 
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
     return { hasError: true };
@@ -253,10 +250,10 @@ interface MediaItem {
 }
 
 // Helper: Wrap GitHub Release image URLs in a CORS proxy (wsrv.nl)
-// This fixes the "302 Found" redirect issues with WebGL textures
+// HIGH QUALITY: Increased width to 1024 and quality to 95 for better visuals
 const getProxiedImageUrl = (filename: string) => {
     // wsrv.nl expects "github.com/..." without https://
-    return `https://wsrv.nl/?url=github.com/happyletty/particle/releases/download/1.0/${filename}&w=512&q=80`;
+    return `https://wsrv.nl/?url=github.com/happyletty/particle/releases/download/1.0/${filename}&w=1024&q=95&output=webp`;
 };
 
 // Video URLs (Proxying video is harder, using direct link with CORS hope, fallback handled by ErrorBoundary)
@@ -268,7 +265,7 @@ const RAW_MEDIA_CONTENT: MediaItem[] = [
   ...Array.from({ length: 25 }, (_, i) => ({
     id: i + 1,
     type: 'image' as const,
-    url: getProxiedImageUrl(`${i + 1}.jpg`) // Use Proxy
+    url: getProxiedImageUrl(`${i + 1}.jpg`) // Use Proxy with HQ
   })),
   { id: 101, type: 'video' as const, url: getVideoUrl('1.mp4') },
   { id: 102, type: 'video' as const, url: getVideoUrl('2.mp4') },
@@ -277,8 +274,9 @@ const RAW_MEDIA_CONTENT: MediaItem[] = [
 
 const calculateMediaPositions = (items: MediaItem[]) => {
   const count = items.length;
-  const yStart = -(TREE_HEIGHT / 2) + 2;
-  const yEnd = (TREE_HEIGHT / 2) - 2;
+  // Shift positions down to avoid the top "star" area
+  const yStart = -(TREE_HEIGHT / 2) + 0.5; // Approx -6.5
+  const yEnd = (TREE_HEIGHT / 2) - 4.5;    // Approx +2.5
   const totalY = yEnd - yStart;
 
   return items.map((item, i) => {
@@ -295,24 +293,9 @@ const calculateMediaPositions = (items: MediaItem[]) => {
 };
 
 // --- Fallback Components ---
-const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = ({ position, visible }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const scaleRef = useRef(0);
-  useFrame((state, delta) => {
-    if(meshRef.current) {
-        meshRef.current.lookAt(state.camera.position);
-        const targetScale = visible ? 1.0 : 0.0;
-        scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
-        meshRef.current.scale.setScalar(scaleRef.current);
-    }
-  });
-  return (
-    <mesh ref={meshRef} position={position}>
-      <boxGeometry args={[0.5, 0.5, 0.5]} />
-      <meshStandardMaterial color="#ef4444" wireframe transparent opacity={0.5} />
-      <Text position={[0,0,0.4]} fontSize={0.1} color="white" anchorX="center" anchorY="middle">!</Text>
-    </mesh>
-  );
+// MODIFIED: Return null to hide placeholder if resource fails
+const ErrorPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = () => {
+  return null;
 };
 
 const LoadingPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean }> = ({ position, visible }) => {
@@ -339,20 +322,26 @@ const LoadingPlaceholder: React.FC<{ position?: THREE.Vector3, visible: boolean 
 const HolographicPanel: React.FC<{ 
   texture: THREE.Texture, 
   item: MediaItem, 
-  onClick: (e: any, item: MediaItem) => void,
+  onClick: (e: any, item: MediaItem) => void, 
   visible: boolean,
-  isVideo?: boolean
-}> = ({ texture, item, onClick, visible, isVideo }) => {
+  isVideo?: boolean,
+  aspectRatio: number 
+}> = ({ texture, item, onClick, visible, isVideo, aspectRatio }) => {
   const groupRef = useRef<THREE.Group>(null);
   const [hovered, setHover] = useState(false);
   const scaleRef = useRef(0);
   const BASE_SIZE = 0.5;
+
+  // Calculate dimensions based on aspect ratio
+  const renderHeight = BASE_SIZE;
+  const renderWidth = BASE_SIZE * aspectRatio;
 
   useFrame((state, delta) => {
     if (groupRef.current) {
       groupRef.current.lookAt(state.camera.position);
       const floatY = Math.sin(state.clock.elapsedTime + item.id) * 0.1; 
       groupRef.current.position.y = (item.position?.y || 0) + floatY;
+      
       const targetScale = visible ? (hovered ? 1.5 : 1.0) : 0;
       scaleRef.current = THREE.MathUtils.lerp(scaleRef.current, targetScale, delta * 4);
       groupRef.current.scale.setScalar(scaleRef.current);
@@ -368,15 +357,15 @@ const HolographicPanel: React.FC<{
       onPointerOut={() => setHover(false)}
     >
       <mesh position={[0, 0, -0.05]}>
-         <boxGeometry args={[BASE_SIZE * 1.1, BASE_SIZE * 1.1, 0.02]} />
+         <boxGeometry args={[renderWidth * 1.1, renderHeight * 1.1, 0.02]} />
          <meshStandardMaterial color={hovered ? "#ffffff" : "#cccccc"} metalness={0.9} roughness={0.2} envMapIntensity={1.5} />
       </mesh>
       <mesh position={[0, 0, 0.005]}>
-          <planeGeometry args={[BASE_SIZE, BASE_SIZE]} />
+          <planeGeometry args={[renderWidth, renderHeight]} />
           <meshBasicMaterial color="#222" />
       </mesh>
       <mesh position={[0, 0, 0.01]}>
-        <planeGeometry args={[BASE_SIZE, BASE_SIZE]} />
+        <planeGeometry args={[renderWidth, renderHeight]} />
         <meshBasicMaterial map={texture} side={THREE.DoubleSide} toneMapped={false} transparent={true} color="white" />
       </mesh>
     </group>
@@ -384,55 +373,109 @@ const HolographicPanel: React.FC<{
 };
 
 const ImageLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
-    // Images are proxied via wsrv.nl so they are safe to load
     const blobUrl = useBlobUrl(item.url); 
     const texture = useLoader(THREE.TextureLoader, blobUrl);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    // Ensure texture updates if the blob loads late
+    const { gl } = useThree();
+
+    // High Quality Texture Settings
     useEffect(() => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = gl.capabilities.getMaxAnisotropy();
+        texture.minFilter = THREE.LinearFilter; // Often sharper for non-POT textures than mipmaps
         texture.needsUpdate = true;
-    }, [texture]);
-    return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} />;
+    }, [texture, gl]);
+    
+    // Calculate aspect ratio from loaded texture
+    const aspect = (texture.image && texture.image.width && texture.image.height) 
+        ? texture.image.width / texture.image.height 
+        : 1;
+
+    return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} aspectRatio={aspect} />;
 };
 
 const VideoLoader: React.FC<{ item: MediaItem, onClick: any, visible: boolean }> = ({ item, onClick, visible }) => {
-    // Videos might fail if they are GitHub Releases. 
-    // If you own the repo, please commit .mp4 files to the repo and use raw.githubusercontent.com
-    // For now we try the blob loader.
     const blobUrl = useBlobUrl(item.url); 
-    // IMPORTANT: removed crossOrigin: 'anonymous' because blob URLs are local/same-origin
     const texture = useVideoTexture(blobUrl, { 
         muted: true, loop: true, start: true, playsInline: true 
     });
-    return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} isVideo />;
+
+    const video = texture.image;
+    // Default to 16:9 if metadata isn't ready yet, or calculate
+    const aspect = (video && video.videoWidth && video.videoHeight)
+        ? video.videoWidth / video.videoHeight
+        : 1.77; 
+
+    return <HolographicPanel texture={texture} item={item} onClick={onClick} visible={visible} isVideo aspectRatio={aspect} />;
 };
 
 // --- Preview Components ---
 const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
   const blobUrl = useBlobUrl(url);
   const texture = useLoader(THREE.TextureLoader, blobUrl);
-  texture.colorSpace = THREE.SRGBColorSpace;
+  const { gl } = useThree();
+
+  // High Quality Settings
+  useEffect(() => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = gl.capabilities.getMaxAnisotropy();
+    texture.minFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+  }, [texture, gl]);
+
+  // Calculate dynamic dimensions for preview
+  const image = texture.image;
+  const aspect = (image && image.width && image.height) ? image.width / image.height : 1.6;
+  
+  // Base height for the preview in the HUD
+  const height = 4.5; 
+  const width = height * aspect;
+
   return (
-    <mesh>
-      <planeGeometry args={[1.6, 1]} />
-      <meshBasicMaterial map={texture} toneMapped={false} transparent />
-    </mesh>
+    <group>
+      {/* Background Frame */}
+      <mesh position={[0, 0, -0.05]}>
+        <planeGeometry args={[width + 0.2, height + 0.2]} />
+        <meshBasicMaterial color="black" transparent opacity={0.8} />
+      </mesh>
+      {/* Image Mesh */}
+      <mesh>
+        <planeGeometry args={[width, height]} />
+        <meshBasicMaterial map={texture} toneMapped={false} transparent />
+      </mesh>
+    </group>
   );
 };
 
 const PreviewVideoPlane: React.FC<{ url: string }> = ({ url }) => {
   const blobUrl = useBlobUrl(url);
-  // Remove crossOrigin for blob
   const texture = useVideoTexture(blobUrl, { muted: false, loop: true, start: true, playsInline: true });
+  
   useEffect(() => {
     const video = texture.image;
     if(video) { video.muted = false; video.volume = 1.0; video.play().catch(console.error); }
   }, [texture]);
+
+  const video = texture.image;
+  const aspect = (video && video.videoWidth && video.videoHeight)
+      ? video.videoWidth / video.videoHeight
+      : 1.77;
+  
+  const height = 4.5;
+  const width = height * aspect;
+
   return (
-    <mesh>
-      <planeGeometry args={[4, 2.25]} />
-      <meshBasicMaterial map={texture} toneMapped={false} />
-    </mesh>
+    <group>
+      {/* Background Frame */}
+      <mesh position={[0, 0, -0.05]}>
+         <planeGeometry args={[width + 0.2, height + 0.2]} />
+         <meshBasicMaterial color="black" transparent opacity={0.8} />
+      </mesh>
+      {/* Video Mesh */}
+      <mesh>
+        <planeGeometry args={[width, height]} />
+        <meshBasicMaterial map={texture} toneMapped={false} />
+      </mesh>
+    </group>
   );
 };
 
@@ -479,22 +522,15 @@ const AnimatedPreview: React.FC<{
 
     return (
         <group ref={groupRef} position={startPos} scale={0}>
-             <mesh position={[0,0,-0.1]}>
-                 <planeGeometry args={[item.type === 'image' ? 3 * 1.6 : 4, item.type === 'image' ? 3 : 2.25]} />
-                 <meshBasicMaterial color="black" transparent opacity={0.8} />
-             </mesh>
+             {/* Note: Background is now handled inside the Preview components to match aspect ratio */}
              {item.type === 'image' ? (
-                 <group scale={3}>
-                    <Suspense fallback={<mesh><planeGeometry args={[1.6,1]} /><meshBasicMaterial color="#333" /></mesh>}>
-                        <PreviewImage url={item.url} />
-                    </Suspense>
-                 </group>
+                 <Suspense fallback={null}>
+                    <PreviewImage url={item.url} />
+                 </Suspense>
              ) : (
-                <group scale={1}>
-                   <Suspense fallback={<mesh><planeGeometry args={[4,2.25]} /><meshBasicMaterial color="#333" /></mesh>}>
-                      <PreviewVideoPlane url={item.url} />
-                   </Suspense>
-                </group>
+                <Suspense fallback={null}>
+                   <PreviewVideoPlane url={item.url} />
+                </Suspense>
              )}
         </group>
     );
