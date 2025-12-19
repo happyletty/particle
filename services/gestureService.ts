@@ -19,19 +19,50 @@ let modeLocked = false;
 
 export const initializeHandLandmarker = async () => {
   try {
-    const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-    );
+    console.log("开始初始化HandLandmarker...");
     
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      numHands: 1
-    });
-    return true;
+    // 首先尝试使用CDN加载
+    try {
+      console.log("尝试使用CDN加载模型...");
+      const filesetResolver = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+      );
+      
+      console.log("FilesetResolver创建成功");
+      
+      // 创建HandLandmarker实例
+      handLandmarker = await HandLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+      });
+      
+      console.log("Hand landmarker initialized successfully with CDN");
+      return true;
+    } catch (cdnError) {
+      console.warn("CDN加载失败，尝试使用本地模型文件:", cdnError);
+      
+      // 如果CDN加载失败，尝试使用本地文件
+      const filesetResolver = await FilesetResolver.forVisionTasks(
+        "/models"
+      );
+      
+      console.log("本地FilesetResolver创建成功");
+      
+      // 创建HandLandmarker实例，使用本地模型文件
+      handLandmarker = await HandLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: `/models/hand_landmarker.task`,
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+      });
+      
+      console.log("Hand landmarker initialized successfully with local files");
+      return true;
+    }
   } catch (error) {
     console.error("Error initializing hand landmarker:", error);
     return false;
@@ -84,6 +115,7 @@ const detectWaveGesture = (direction: 'up' | 'down'): boolean => {
 
 export const detectGestures = (video: HTMLVideoElement): GestureResult => {
   if (!handLandmarker) {
+    console.log("Hand landmarker not initialized");
     return {
       fiveFingerPinch: false,
       twoFingerPinch: false,
@@ -97,6 +129,11 @@ export const detectGestures = (video: HTMLVideoElement): GestureResult => {
   }
 
   const result = handLandmarker.detectForVideo(video, performance.now());
+  
+  // Log when we get results
+  if (result.landmarks) {
+    console.log("Landmarks detected:", result.landmarks.length);
+  }
 
   if (result.landmarks && result.landmarks.length > 0) {
     const landmarks = result.landmarks[0];

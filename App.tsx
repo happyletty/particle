@@ -99,6 +99,7 @@ const App: React.FC = () => {
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
   const [status, setStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
+  const [key, setKey] = useState<number>(0); // Used to force re-render of CameraHandler
   const [modeLocked, setModeLocked] = useState(false);
   const [showNearestMaterial, setShowNearestMaterial] = useState(false);
   
@@ -137,6 +138,15 @@ const App: React.FC = () => {
   // 手势处理函数
   const handleGestureDetected = (gesture: GestureResult) => {
     console.log('手势检测:', gesture);
+    
+    // Check if any gesture is detected
+    const anyGesture = gesture.fiveFingerPinch || gesture.twoFingerPinch || 
+                      gesture.threeFingerPinch || gesture.upwardWave || 
+                      gesture.downwardWave;
+    
+    if (anyGesture) {
+      console.log('检测到手势活动');
+    }
 
     // 1. 五指抓握显示圣诞树并锁定模式
     if (gesture.fiveFingerPinch) {
@@ -177,6 +187,14 @@ const App: React.FC = () => {
       setShowNearestMaterial(prev => !prev);
       return;
     }
+  };
+
+  // Reset camera handler to re-request permissions
+  const handleResetCamera = () => {
+    console.log("Resetting camera handler...");
+    setKey(prev => prev + 1); // Force re-render of CameraHandler
+    setStatus("Initializing...");
+    setError(null);
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -249,10 +267,28 @@ const App: React.FC = () => {
 
       {/* UI Overlay Layer - Minimalist */}
       <div className="ui-layer">
-        {!isReady && !hasError && (
+        {(!isReady || hasError) && (
            <div className="loading-card">
              <div className="spinner" style={{width: '24px', height: '24px', border: '2px solid #ffffff33', borderTop: '2px solid #ffffff', borderRadius: '50%', animation: 'spin 1s linear infinite'}} />
-             <span className="loading-text">{status}</span>
+             <span className="loading-text">{hasError ? `Error: ${error}` : status}</span>
+             {hasError && (
+                <div style={{ marginTop: '10px' }}>
+                  <button 
+                    onClick={handleResetCamera}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#4a4a4a',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Retry Camera Access
+                  </button>
+                </div>
+              )}
            </div>
         )}
       </div>
@@ -263,9 +299,11 @@ const App: React.FC = () => {
 
 
       <CameraHandler 
+        key={key}
         onGestureDetected={handleGestureDetected} 
         onStatusChange={setStatus}
         onError={setError}
+        onReset={handleResetCamera}
       />
 
     </div>
