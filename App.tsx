@@ -267,28 +267,10 @@ const App: React.FC = () => {
 
       {/* UI Overlay Layer - Minimalist */}
       <div className="ui-layer">
-        {(!isReady || hasError) && (
+        {(!isReady && !hasError) && (
            <div className="loading-card">
              <div className="spinner" style={{width: '24px', height: '24px', border: '2px solid #ffffff33', borderTop: '2px solid #ffffff', borderRadius: '50%', animation: 'spin 1s linear infinite'}} />
-             <span className="loading-text">{hasError ? `Error: ${error}` : status}</span>
-             {hasError && (
-                <div style={{ marginTop: '10px' }}>
-                  <button 
-                    onClick={handleResetCamera}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#4a4a4a',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '14px'
-                    }}
-                  >
-                    Retry Camera Access
-                  </button>
-                </div>
-              )}
+             <span className="loading-text">{status}</span>
            </div>
         )}
       </div>
