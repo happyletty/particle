@@ -216,7 +216,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
+    <div className="app-container" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onClick={handleClick}>
       
       {/* 3D Scene Layer */}
       <div className="scene-layer">
@@ -225,9 +225,6 @@ const App: React.FC = () => {
           camera={{ position: [0, 16, 35], fov: 50 }} 
           gl={{ antialias: true, toneMappingExposure: 1.2 }} 
           dpr={[1, 2]} 
-          onPointerDown={handlePointerDown}
-          onPointerUp={handlePointerUp}
-          onClick={handleClick}
         >
           <color attach="background" args={['#000000']} />
           
