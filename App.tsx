@@ -201,14 +201,18 @@ const App: React.FC = () => {
     dragStart.current = { x: e.clientX, y: e.clientY };
   };
 
-  const handlePointerMissed = (event: MouseEvent) => {
-    const dx = event.clientX - dragStart.current.x;
-    const dy = event.clientY - dragStart.current.y;
+  const handlePointerUp = (e: React.PointerEvent) => {
+    const dx = e.clientX - dragStart.current.x;
+    const dy = e.clientY - dragStart.current.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
     if (distance < 5) {
       setManualToggle(prev => !prev);
     }
+  };
+
+  const handleClick = () => {
+    setManualToggle(prev => !prev);
   };
 
   return (
@@ -222,7 +226,8 @@ const App: React.FC = () => {
           gl={{ antialias: true, toneMappingExposure: 1.2 }} 
           dpr={[1, 2]} 
           onPointerDown={handlePointerDown}
-          onPointerMissed={handlePointerMissed}
+          onPointerUp={handlePointerUp}
+          onClick={handleClick}
         >
           <color attach="background" args={['#000000']} />
           
