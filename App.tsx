@@ -7,7 +7,7 @@ import { ShapeType } from './types';
 import { GestureResult } from './services/gestureService';
 
 // --- Background Music Component ---
-const BackgroundMusic = ({ currentShape }: { currentShape: ShapeType }) => {
+const BackgroundMusic = ({ currentShape, hasUserInteracted }: { currentShape: ShapeType; hasUserInteracted: boolean }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -32,7 +32,35 @@ const BackgroundMusic = ({ currentShape }: { currentShape: ShapeType }) => {
     // 设置音量
     audio.volume = 0.4;
 
-    // 立即尝试播放音频
+    // 如果用户已经交互过，切换模式后重新播放
+    if (hasUserInteracted) {
+      const playAudio = () => {
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log("音乐播放成功");
+              setIsPlaying(true);
+            })
+            .catch(err => {
+              console.log("音频播放失败:", err);
+            });
+        }
+      };
+
+      // 延迟一点播放，确保音频源加载完成
+      setTimeout(playAudio, 100);
+    }
+  }, [currentShape, hasUserInteracted]);
+
+  // 用户交互后启动音乐
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !hasUserInteracted) return;
+
+    console.log("检测到用户交互，启动音乐");
+    
+    // 尝试播放音频
     const playAudio = () => {
       const playPromise = audio.play();
       if (playPromise !== undefined) {
@@ -43,15 +71,17 @@ const BackgroundMusic = ({ currentShape }: { currentShape: ShapeType }) => {
           })
           .catch(err => {
             console.log("音频播放失败:", err);
-            // 即使自动播放失败，我们也认为音频已准备好
-            setIsPlaying(true);
           });
       }
     };
 
-    // 延迟一点播放，确保音频源加载完成
-    setTimeout(playAudio, 100);
-  }, [currentShape]);
+    // 立即尝试播放
+    playAudio();
+
+    return () => {
+      // 清理
+    };
+  }, [hasUserInteracted]);
 
   return (
     <audio
@@ -66,6 +96,7 @@ const App: React.FC = () => {
   const [isCameraPinching, setIsCameraPinching] = useState(false);
   const [manualToggle, setManualToggle] = useState(false);
   const [showMediaOnly, setShowMediaOnly] = useState(false);
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
   const [status, setStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
   const [key, setKey] = useState<number>(0); // Used to force re-render of CameraHandler
@@ -79,6 +110,30 @@ const App: React.FC = () => {
   
   const isReady = status === "Ready";
   const hasError = !!error;
+
+  // 监听用户交互来启动音乐
+  useEffect(() => {
+    const handleFirstInteraction = () => {
+      if (!hasUserInteracted) {
+        console.log("检测到用户交互，启动音乐");
+        setHasUserInteracted(true);
+        // 移除监听器，避免重复触发
+        document.removeEventListener('click', handleFirstInteraction);
+        document.removeEventListener('touchstart', handleFirstInteraction);
+        document.removeEventListener('keydown', handleFirstInteraction);
+      }
+    };
+
+    document.addEventListener('click', handleFirstInteraction, { once: true });
+    document.addEventListener('touchstart', handleFirstInteraction, { once: true });
+    document.addEventListener('keydown', handleFirstInteraction, { once: true });
+
+    return () => {
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('touchstart', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+    };
+  }, [hasUserInteracted]);
 
   // 手势处理函数
   const handleGestureDetected = (gesture: GestureResult) => {
@@ -221,7 +276,7 @@ const App: React.FC = () => {
       </div>
 
       {/* Background Music */}
-      <BackgroundMusic currentShape={currentShape} />
+      <BackgroundMusic currentShape={currentShape} hasUserInteracted={hasUserInteracted} />
 
 
 
